@@ -1,0 +1,60 @@
+
+
+<PropertyList>
+  <sim>
+    <rendering>
+      <camera-group>
+        <camera>
+          <window>
+            <name type="string">main</name>
+            <host-name type="string"></host-name>
+            <display>0</display>
+            <screen>0</screen>
+            <!-- <fullscreen type = "bool">true</fullscreen>-->
+            <width>1920</width>
+            <height>1080</height>
+          </window>
+          <view>
+            <heading-deg type="double">0.0</heading-deg>
+            <roll-deg type="double">0.0</roll-deg>
+            <pitch-deg type="double">0</pitch-deg>
+          </view>
+          <physical-dimensions>
+            <width>1920</width>
+            <height>1080</height>
+          </physical-dimensions>
+          <master-perspective>
+            <eye-distance>450</eye-distance>
+            <x-offset>0</x-offset>
+            <y-offset>130</y-offset>
+          </master-perspective>
+          <texture>
+            <name>mainview</name>
+            <width>1920</width>
+            <height>1080</height>
+          </texture>
+        </camera>
+        <camera>
+          <window><name>main</name></window>
+          <ortho>
+            <top>1080</top>
+            <bottom>0</bottom>
+            <left>0</left>
+            <right>1920</right>
+            <near>-1.0</near>
+            <far>1.0</far>
+          </ortho>
+          <panoramic-spherical>
+            <texture>mainview</texture>
+            <file>calibration_points.txt</file>
+          </panoramic-spherical>
+        </camera>
+        <gui>
+          <window>
+            <name type="string">main</name>
+          </window>
+        </gui>
+      </camera-group>
+    </rendering>
+  </sim>
+</PropertyList>
