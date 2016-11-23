@@ -51,13 +51,13 @@ If everything goes well, Screenwarp will do the following:
 
 The output file format is quite simple:
 
-ROWS COLS
-IDEAL_X1 IDEAL_Y1 CORRECTED_X1 CORRECTED_Y1 INTENSITY1
-IDEAL_X2 IDEAL_Y2 CORRECTED_X2 CORRECTED_Y2 INTENSITY2
-.
-.
-.
-IDEAL_Xn IDEAL_Yn CORRECTED_Xn CORRECTED_Yn INTENSITYn
+    ROWS COLS
+    IDEAL_X1 IDEAL_Y1 CORRECTED_X1 CORRECTED_Y1 INTENSITY1
+    IDEAL_X2 IDEAL_Y2 CORRECTED_X2 CORRECTED_Y2 INTENSITY2
+    .
+    .
+    .
+    IDEAL_Xn IDEAL_Yn CORRECTED_Xn CORRECTED_Yn INTENSITYn
 
 The first row has the number of rows and columns. This is followed by a line for each point (ROWS*COLS points in total).
 In each row, the first four values are X and Y coordinates as a percentage of the screen width or height respectively. These are values between 0 and 1.
