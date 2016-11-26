@@ -1,0 +1,159 @@
+--- flightgear-2016.3.1-orig/src/Viewer/CameraGroup.cxx	2016-09-08 07:52:29.000000000 +0100
++++ flightgear-2016.3.1/src/Viewer/CameraGroup.cxx	2016-11-23 02:15:15.632152390 +0000
+@@ -602,7 +602,6 @@
+ }
+ 
+ // Mostly copied from osg's osgViewer/View.cpp
+-
+ static osg::Geometry* createPanoramicSphericalDisplayDistortionMesh(
+     const Vec3& origin, const Vec3& widthVector, const Vec3& heightVector,
+     double sphere_radius, double collar_radius,
+@@ -678,11 +677,16 @@
+ 
+ 
+             osg::Vec3 v = screenCenter + osg::Vec3(sin(alpha)*gamma*2.0/osg::PI, -cos(alpha)*gamma*2.0/osg::PI, 0.0f)*screenRadius;
++            osg::Vec3 v2;
+ 
+             if (flip)
+-                vertices->push_back(osg::Vec3(v.x(), top.y()-(v.y()-origin.y()),v.z()));
++                v2 = osg::Vec3(v.x(), top.y()-(v.y()-origin.y()),v.z());
+             else
+-                vertices->push_back(v);
++                v2 = v;
++
++            OSG_WARN<<"coords x: "<< v2.x() <<" y: "<< v2.y() <<" z: "<< v2.z()<<std::endl;;
++
++            vertices->push_back(v2);
+ 
+             texcoords0->push_back( texcoord );
+ 
+@@ -746,6 +750,93 @@
+     return geometry;
+ }
+ 
++
++static osg::Geometry* createCustomDistortionMesh(const osg::Vec3& widthVector, const osg::Vec3& heightVector, string fileName)
++{
++    bool flip = true;
++    bool texcoord_flip = true;
++
++    // create the quad to visualize.
++    osg::Geometry* geometry = new osg::Geometry();
++
++    geometry->setSupportsDisplayList(false);
++
++    osg::Vec3 xAxis(widthVector);
++    float width = widthVector.length();
++    xAxis /= width;
++
++    osg::Vec3 yAxis(heightVector);
++    float height = heightVector.length();
++    yAxis /= height;
++
++    osg::Vec3Array* vertices = new osg::Vec3Array;
++    osg::Vec2Array* texcoords0 = new osg::Vec2Array;
++    osg::Vec2Array* texcoords1 = new osg::Vec2Array;
++    osg::Vec4Array* colors = new osg::Vec4Array;
++
++    geometry->getOrCreateStateSet()->setMode(GL_CULL_FACE, osg::StateAttribute::OFF | osg::StateAttribute::PROTECTED);
++
++    int rows, cols;
++    // xb (Xbase) and yb (Ybase) are the original undistorted grid coordinates
++    // xc (Xcorrected) and yc (Ycorrected) are the corrected (distorted) grid coordinates
++    // i is the intensity value at the given point
++    double xb, yb, xc, yc, i;
++
++    std::ifstream infile(fileName);
++    if(!infile) {
++        OSG_WARN<<"Could not open distortion map file '"<<"'"<<std::endl;
++        return geometry;
++    }
++    infile >> rows >> cols;
++    while (infile >> xb >> yb >> xc >> yc >> i) {
++
++        if(flip) yc = 1 - yc;
++        if(texcoord_flip) yb = 1 - yb;
++        osg::Vec3 v(xc*width, yc*height, 0.0);
++        osg::Vec2 texcoord(xb, yb);
++
++        vertices->push_back(v);
++        texcoords0->push_back( texcoord );
++        texcoords1->push_back( texcoord );
++        colors->push_back(osg::Vec4(i, i, i, i));
++    }
++
++    // pass the created vertex array to the points geometry object.
++    geometry->setVertexArray(vertices);
++
++    geometry->setColorArray(colors);
++    geometry->setColorBinding(osg::Geometry::BIND_PER_VERTEX);
++
++    geometry->setTexCoordArray(0, texcoords0);
++    geometry->setTexCoordArray(1, texcoords1);
++
++    osg::DrawElementsUShort* elements = new osg::DrawElementsUShort(osg::PrimitiveSet::TRIANGLES);
++    geometry->addPrimitiveSet(elements);
++
++
++    for(int i=0;i<rows-1;++i)
++    {
++        for(int j=0;j<cols-1;++j)
++        {
++            int i1 = j+(i+1)*cols;
++            int i2 = j+(i)*cols;
++            int i3 = j+1+(i)*cols;
++            int i4 = j+1+(i+1)*cols;
++
++            elements->push_back(i1);
++            elements->push_back(i2);
++            elements->push_back(i3);
++
++            elements->push_back(i1);
++            elements->push_back(i3);
++            elements->push_back(i4);
++        }
++    }
++
++    return geometry;
++}
++
++
+ void CameraGroup::buildDistortionCamera(const SGPropertyNode* psNode,
+                                         Camera* camera)
+ {
+@@ -760,6 +851,7 @@
+         // error
+         return;
+     }
++
+     Viewport* viewport = camera->getViewport();
+     float width = viewport->width();
+     float height = viewport->height();
+@@ -767,9 +859,19 @@
+     double radius = psNode->getDoubleValue("radius", 1.0);
+     double collar = psNode->getDoubleValue("collar", 0.45);
+     Geode* geode = new Geode();
++
++
++    const SGPropertyNode* fileNode = psNode->getNode("file");
++    if (fileNode) {
++        string fileName = fileNode->getStringValue();
++        OSG_INFO<<"Loading distortion map from file: "<<fileName<<std::endl;
++        geode->addDrawable(createCustomDistortionMesh(
++                           Vec3(width,0.0f,0.0f), Vec3(0.0f,height,0.0f), fileName));
++    } else {
+     geode->addDrawable(createPanoramicSphericalDisplayDistortionMesh(
+                            Vec3(0.0f,0.0f,0.0f), Vec3(width,0.0f,0.0f),
+                            Vec3(0.0f,height,0.0f), radius, collar));
++    }
+ 
+     // new we need to add the texture to the mesh, we do so by creating a
+     // StateSet to contain the Texture StateAttribute.
+@@ -795,6 +897,7 @@
+     camera->setName("DistortionCorrectionCamera");
+ }
+ 
++
+ CameraInfo* CameraGroup::buildCamera(SGPropertyNode* cameraNode)
+ {
+     WindowBuilder *wBuild = WindowBuilder::getWindowBuilder();
