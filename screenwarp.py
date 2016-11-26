@@ -67,10 +67,15 @@ def main():
         logger.error("File '%s' could not be read", args.infile)
         exit(1)
 
+    logger.info("Looking for %s x %s inside corners", rows-2, cols-2)
     status, data = cv2.findChessboardCorners(img, (rows-2, cols-2), flags=cv2.cv.CV_CALIB_CB_ADAPTIVE_THRESH)
     if status == False:
         logger.error("Failed to parse checkerboard pattern in image")
         exit(2)
+
+    vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    cv2.drawChessboardCorners(vis, (rows-2, cols-2), data, status)
+    cv2.imwrite('chess.png', vis)
 
     r = 1
     c = 1
