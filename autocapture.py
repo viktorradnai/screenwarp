@@ -111,7 +111,7 @@ class ScreenFrame(wx.Panel):
     def displayColor(self, color):
         logger.debug('displayColor')
         for c in self.panel.GetChildren():
-            logger.debug(c)
+            #logger.debug(c)
             c.Destroy()
         self.panel.SetBackgroundColour(color)
         self.panel.Show()
@@ -228,9 +228,9 @@ class MainApp(wx.App):
         if not event.data:
             logger.error("No data received, exiting")
             self.Close()
-        logger.debug("Received command")
         #logger.debug(event.data)
         action = event.data['action']
+        logger.debug("Received command %s", action)
         if action == 'displayImage':
             self.frames[event.data['window']].displayImage(event.data['image'])
         elif action == 'displayColor':
@@ -353,19 +353,13 @@ class WorkerThread(Thread):
                     imgdiff2 = cv2.subtract(img2, img1)
                     self.putImage(imgdiff2, 'imgdiff2')
 
-                    # Add two diff images together to fill visible area, then threshold it to create mask
-                    imgdiff = cv2.add(imgdiff1, imgdiff2)
-                    self.putImage(imgdiff, 'imgdiff')
-                    img = cv2.cvtColor(imgdiff, cv2.COLOR_BGR2GRAY)
-                    img = cv2.medianBlur(img, 13)
-                    ret, mask = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
-                    self.putImage(mask, 'mask')
+                    mask = self.getMask(imgdiff1, imgdiff2)
 
                     # Mask out everything other than the chessboard area, do detection
                     img1m = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-                    ret, img1a = cv2.threshold(img1m, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+                    ret, img1m = cv2.threshold(img1m, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
                     img1m = cv2.add(img1m, mask)
-                    self.putImage('imgdiff1-masked', img1m)
+                    self.putImage(img1m, 'diff1-masked')
 
                     try:
                         vis = self.findChessboard(img1m, cnrx, cnry)
@@ -376,35 +370,19 @@ class WorkerThread(Thread):
 
                     img2m = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
                     ret, img2m = cv2.threshold(img2m, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
-                    img2m = cv2.add(img, mask)
-                    self.putImage('imgdiff2-masked', img2m)
+                    img2m = cv2.add(img2m, mask)
+                    self.putImage(img2m, 'diff2-masked')
 
                     try:
-                        vis = self.findChessboard(img2a, cnrx, cnry)
+                        vis = self.findChessboard(img2m, cnrx, cnry)
                         self.putImage(vis, 'imgdiff2-cb')
                     except NotFoundError:
                         pass
 
-                    points = self.findCorners(img)
-                    img = draw_points(points, img.shape[1], img.shape[0], 0, 0)
-                    with open("window{0}-img{1}.png".format(sname, 'corners'), 'wb') as f: f.write(img.getvalue())
-                    self.sendCommand('displayImage', window=sname, image=img)
-                    self.wait()
+                    points = self.findCorners(img1m)
+                    img = draw_points(points, img1m.shape[1], img1m.shape[0], 0, 0)
+                    self.putImage(img, 'img1-points')
 
-                    bw = 10
-                    mask2 = cv2.copyMakeBorder(mask, top=bw, bottom=bw, left=bw, right=bw, borderType=cv2.BORDER_CONSTANT, value=[255, 255, 255] )
-                    #mask2 = mask.copy()
-
-                    (cnts, x) = cv2.findContours(mask2, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-                    logger.info("Found %s contours", len(cnts))
-                    cnts = sorted(cnts, key = cv2.contourArea, reverse = True)[1:2]
-                    #cv2.drawContours(mask2, cnts, -1, (255,0,0), 2)
-
-                    mask2 = np.zeros(mask.shape, np.uint8)
-                    cv2.fillPoly(mask2, pts=cnts, color=(255,255,255))
-                    self.sendCommand('displayImage', window=sname, image=img_cv_to_stringio(mask2))
-                    cv2.imwrite("window{0}-img{1}.png".format(sname, '-contours'), mask2)
-                    self.wait(1)
                     logger.debug("Finished screen %s", sname)
                     self.sendCommand('displayColor', window=sname, color='#000')
 
@@ -420,6 +398,34 @@ class WorkerThread(Thread):
             self.sendCommand('exit')
             exit()
 
+
+    def getMask(self, img1, img2):
+
+            # Add two diff images together to fill visible area, then threshold it to create mask
+            imgdiff = cv2.add(img1, img2)
+            self.putImage(imgdiff, 'imgdiff')
+            img = cv2.cvtColor(imgdiff, cv2.COLOR_BGR2GRAY)
+            img = cv2.medianBlur(img, 13)
+            ret, mask = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+            self.putImage(mask, 'mask')
+
+            # Detect closed contours in the image, then pick the second largest which should be the projector's main visible area
+            # The largest contour is a border around the entire picture
+            border = 10
+            maskb = cv2.copyMakeBorder(mask, top=border, bottom=border, left=border, right=border, borderType=cv2.BORDER_CONSTANT, value=[255, 255, 255] )
+
+            (cnts, x) = cv2.findContours(maskb, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            logger.info("Found %s contours", len(cnts))
+            cnts = sorted(cnts, key = cv2.contourArea, reverse = True)[1:2]
+            #cv2.drawContours(mask2, cnts, -1, (255,0,0), 2)
+
+            mask2 = np.zeros(maskb.shape, np.uint8)
+            mask2[:] = (255)
+            cv2.fillPoly(mask2, pts=cnts, color=(0,0,0))
+            mask2 = mask2[border:-border, border:-border]
+            self.putImage(mask2, 'mask2')
+            logger.debug(mask2.shape)
+            return mask2
 
 
     def findCorners(self, img):
@@ -472,16 +478,20 @@ class WorkerThread(Thread):
         if view is None: view=self.currView
         if screen is None: screen=self.currScreen
 
-        path = "view{0}-screen{0}-img{1}.png".format(view, screen, name)
+        path = "view{0}-screen{1}-{2}.png".format(view, screen, name)
         logger.debug("Image %s is a %s", path, type(img).__name__)
 
-        if type(img).__name__ == 'StringI':
+        if isinstance(img, str):
+            logger.debug('string')
+            with open(path, 'wb') as f: f.write(img)
+            self.sendCommand('displayImage', window=screen, image=cStringIO.StringIO(img))
+        elif isinstance(img, np.ndarray):
+            logger.debug("ndarray")
+            cv2.imwrite(path, img)
+            self.sendCommand('displayImage', window=screen, image=img_cv_to_stringio(img))
+        elif type(img).__name__ == 'StringI':
             with open(path, 'wb') as f: f.write(img.getvalue())
             self.sendCommand('displayImage', window=screen, image=img)
-        elif isinstance(img, np.ndarray):
-            cv2.imwrite(path, img)
-            self.sendCommand('displayImage', window=screen, image=img_cv_to_stringio)
-
         self.wait(wait)
 
 
