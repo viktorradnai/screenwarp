@@ -3,6 +3,7 @@
 import cv2
 import sys
 import time
+import json
 import logging
 import argparse
 
@@ -27,6 +28,12 @@ IMAGE_CAPTURE_URL = 'http://192.168.43.194:8080/photoaf.jpg'
 
 
 class ImageCaptureError(Exception):
+    pass
+
+class NotFoundError(Exception):
+    pass
+
+class Aborted(Exception):
     pass
 
 class AndroidIPCamera:
@@ -71,11 +78,14 @@ class CommandEvent(wx.PyEvent):
 
 
 class WindowFrame(wx.Frame):
+    pass
+
+class ScreenFrame(wx.Panel):
 
     def __init__(self, *args, **kwargs):
         # logger.debug(args)
         self.parent = args[0]
-        super(WindowFrame, self).__init__(*args[1:], **kwargs)
+        super(ScreenFrame, self).__init__(*args[1:], **kwargs)
         self.panel = wx.Panel(self, wx.ID_ANY, pos=(0, 0), size=self.GetSize(), style=wx.NO_BORDER)
         self.panel.SetBackgroundColour("#000")
         self.panel.Bind(wx.EVT_KEY_DOWN, self.parent.onKeyPress)
@@ -86,7 +96,7 @@ class WindowFrame(wx.Frame):
     def displayImage(self, image):
         logger.debug('displayImage')
         for c in self.panel.GetChildren():
-            logger.debug(c)
+            #logger.debug(c)
             c.Destroy()
         img = wx.ImageFromStream(image).ConvertToBitmap()
         wx.StaticBitmap(self.panel, -1, img, (0, 0), (img.GetWidth(), img.GetHeight()))
@@ -105,13 +115,12 @@ class WindowFrame(wx.Frame):
 
 
 class MainApp(wx.App):
-    frames = {}
-    windows = {}
+    screens = {}
+    windows = {} # WindowFrame objects
+    frames = {}  # ScreenFrame objects
 
     def OnInit(self):
         self.cond = Condition()
-        screen_width = 1280
-        screen_height = 768
 
         # Set up event handler for any worker thread results
         EVT_COMMAND(self, self.onCommand)
@@ -119,39 +128,82 @@ class MainApp(wx.App):
         args = self.parseCmdline()
         self.args = args
 
-        num_displays = wx.Display.GetCount()
-        #Open a frame on each display
+        if args.usecache:
+            try:
+                with open('cache/screens.json') as f:
+                    displays = json.load(f)['displays']
+            except Exception as e:
+                logger.error("Caught exception, exiting")
+                logger.error(traceback.format_exc())
+        else:
+            displays = self.getDisplays()
 
-        for i in range(num_displays):
+        """
+            Open windows in each display but create a frame for each screen.
+            A display may be made of more than one screen, eg. if using Xinerama
+            or a hardware solution such as a Matrox TripleHead2Go
+        """
+        for dname in displays.keys():
+            size = ( displays[dname]['width'], displays[dname]['height'] )
+            # Hack to position windows sensibly in cache mode
+            topleft = (0, 0) if args.usecache else ( displays[dname]['top'], displays[dname]['left'] )
+
+            title = "Display "+dname
+            logger.info('Creating window "%s" on display %s with size %s x %s offset %s %s', title, dname, size[0], size[1], topleft[0], topleft[1])
+            window = WindowFrame(None, -1, title, topleft, size)
+            if not args.usecache:
+                screen.ShowFullScreen(True, style=wx.FULLSCREEN_ALL)
+            self.windows[dname] = window
+
+            screens = self.getScreens(dname, size[0], size[1])
+
+            for sname in screens.keys():
+                size = ( screens[sname]['width'], screens[sname]['height'] )
+                logger.info('Creating frame for screen "%s" in window %s with size %s x %s offset %s %s', sname, title, size[0], size[1], topleft[0], topleft[1])
+                #frame = ScreenFrame(self, window, -1, "Screen "+sname, screens[sname]['topleft'], size)
+                frame = ScreenFrame(self, window, -1, screens[sname]['topleft'], size, style=wx.NO_BORDER)
+                self.frames[sname] = frame
+
+            self.screens.update(screens)
+            window.Show()
+        self.worker = WorkerThread(self, self.screens, args, self.cond)
+        return True
+
+
+    def getScreens(self, dname, width, height):
+        screens = {}
+        ar = height / (width / 16)
+        if ar < 9:
+
+            logger.debug("Multiscreen display detected, splitting")
+            cols = int(9 / ar)
+            width /= cols
+            logger.debug("Cols: %s", cols)
+            for i in range(cols):
+                screens["{0}-{1}".format(dname, i)] = { 'topleft': (width*i, 0), 'width': width, 'height': height }
+        elif ar > 12:
+            rows = int(ar / 9)
+            height /= rows
+            logger.debug("Rows: %s", rows)
+            for i in range(rows):
+                screens["{0}.{1}".format(dname, i)] = { 'topleft': (0, height*i), 'width': width, 'height': height }
+        else:
+            screens[dname] = { 'topleft': (0, 0), 'width': width, 'height': height }
+
+        return screens
+
+
+    def getDisplays(self):
+        displays = {}
+        # Find distinct displays, split aggretates if necessary
+        for i in range(wx.Display.GetCount()):
             display = wx.Display(i)
             geometry = display.GetGeometry()
             topleft = geometry.GetTopLeft()
             size = geometry.GetSize()
             logger.info("Display %s has size %s x %s at offset %s %s", i, size[0], size[1], topleft[0], topleft[1])
-            if size[0] > 1920:
-                logger.debug("Dual display detected, splitting")
-                width = size[0]/2
-                self.windows["{0}-1".format(i)] = { 'topleft': topleft, 'width': width, 'height': size[1] }
-                self.windows["{0}-2".format(i)] = { 'topleft': ( topleft[0] + width, topleft[1] ), 'width': width, 'height': size[1] }
-            else:
-                self.windows["{0}".format(i)] = { 'topleft': topleft, 'width': size[0], 'height': size[1] }
-
-
-
-        for i in self.windows.keys():
-            logger.debug("Window %s", i)
-            #Create a frame on the display
-            size = ( self.windows[i]['width'], self.windows[i]['height'] )
-            topleft = self.windows[i]['topleft']
-            title = "Display %s"%i
-            frame = WindowFrame(self, None, -1, title, topleft, size)
-
-            frame.ShowFullScreen(True, style=wx.FULLSCREEN_ALL)
-            frame.Show()
-            logger.info('Creating window "%s" on display %s with size %s x %s offset %s %s', title, i, size[0], size[1], topleft[0], topleft[1])
-            self.frames[i] = frame
-        self.worker = WorkerThread(self, self.windows, args, self.cond)
-        return True
+            displays["{0}".format(i)] = { 'topleft': topleft, 'width': size[0], 'height': size[1] }
+            return displays
 
 
     def onKeyPress(self, event):
@@ -188,7 +240,7 @@ class MainApp(wx.App):
 
 
     def Close(self):
-        for f in self.frames.values():
+        for f in self.windows.values():
             f.Close()
 
 
@@ -225,7 +277,7 @@ class WorkerThread(Thread):
     def __init__(self, gui, windows, args, cond):
         Thread.__init__(self)
         self.gui = gui
-        self.windows = windows
+        self.screens = windows
         self._want_abort = 0
         self.args = args
         self.cond = cond
@@ -239,18 +291,30 @@ class WorkerThread(Thread):
     def run(self):
         rows = 40
         cols = 24
-        cnrx = 35
-        cnry = 15
+        cnrx = rows - 1
+        cnry = cols - 1
         try:
-            for wname in self.windows.keys():
-                w = self.windows[wname]
+            for wname in self.screens.keys():
+                w = self.screens[wname]
+                screenid = draw_text(wname, w['width'], w['height'])
+                self.sendCommand('displayImage', window=wname, image=screenid)
+            self.wait(1)
+
+            for wname in self.screens.keys():
+                w = self.screens[wname]
+                self.sendCommand('displayColor', window=wname, color='#000')
+
+            logger.debug(self.screens)
+            for wname in self.screens.keys():
+                w = self.screens[wname]
 
                 if wname not in self.args.displays:
                     logger.info("Skipping display %s", wname)
-                    self.sendCommand('displayColor', window=wname, color='#000')
                     continue
 
                 logger.info("Processing display %s", wname)
+                self.wait()
+
                 cb = self.drawChessboard(w['width'], w['height'], rows, cols, '#fff', '#000')
                 with open('cb1.png', 'wb') as f: f.write(cb.getvalue())
                 self.sendCommand('displayImage', window=wname, image=cb)
@@ -282,62 +346,73 @@ class WorkerThread(Thread):
                 imgdiff2 = img
                 self.wait()
 
-                img = cv2.add(imgdiff1, imgdiff2)
-                self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(img))
-                cv2.imwrite("window{0}-img{1}.png".format(wname, 5), img)
-                imgdiff = img
+                imgdiff = cv2.add(imgdiff1, imgdiff2)
+                self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(imgdiff))
+                cv2.imwrite("window{0}-img{1}.png".format(wname, 'diff'), imgdiff)
                 self.wait()
 
                 img = cv2.cvtColor(imgdiff, cv2.COLOR_BGR2GRAY)
-
                 img = cv2.medianBlur(img, 13)
                 #blur = cv2.GaussianBlur(img,(5,5),0)
                 ret, mask = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
                 self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(mask))
-                cv2.imwrite("window{0}-img{1}.png".format(wname, 6), mask)
+                cv2.imwrite("window{0}-img{1}.png".format(wname, 'mask'), mask)
                 self.wait()
 
 
                 img = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-                ret, img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+                ret, img1a = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
                 #img = cv2.add(img, mask)
                 self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(img))
-                cv2.imwrite("window{0}-img{1}.png".format(wname, 7), img)
+                cv2.imwrite("window{0}-img{1}.png".format(wname, 7), img1a)
                 self.wait()
 
-                logger.info("Looking for %s x %s inside corners", cnrx, cnry)
-                status, data = cv2.findChessboardCorners(img, (cnrx, cnry), flags=cv2.cv.CV_CALIB_CB_ADAPTIVE_THRESH)
-                if status == False:
-                    logger.error("Failed to parse checkerboard pattern in image")
-                else:
-                    logger.info("Checkerboard found")
-                    vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-                    cv2.drawChessboardCorners(vis, (cnrx, cnry), data, status)
+                try:
+                    vis = self.findChessboard(img1a, cnrx, cnry)
                     self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(vis))
                     cv2.imwrite("window{0}-img{1}.png".format(wname, '-chess1'), vis)
-
-                    self.wait(1)
+                    self.wait()
+                except NotFoundError:
+                    pass
 
                 img = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-                ret, img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+                ret, img2a = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
                 #img = cv2.add(img, mask)
-                self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(img))
+                self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(img2a))
                 cv2.imwrite("window{0}-img{1}.png".format(wname, 8), img)
                 self.wait()
 
-                status, data = cv2.findChessboardCorners(img, (cnrx, cnry), flags=cv2.cv.CV_CALIB_CB_ADAPTIVE_THRESH)
-                if status == False:
-                    logger.error("Failed to parse checkerboard pattern in image")
-                else:
-                    logger.info("Checkerboard found")
-                    vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-                    cv2.drawChessboardCorners(vis, (cnrx, cnry), data, status)
+                try:
+                    vis = self.findChessboard(img2a, cnrx, cnry)
                     self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(vis))
                     cv2.imwrite("window{0}-img{1}.png".format(wname, '-chess2'), vis)
-                    self.wait(1)
+                    self.wait()
+                except NotFoundError:
+                    pass
+                self.wait()
 
+                points = self.findCorners(img)
+                img = draw_points(points, img.shape[1], img.shape[0], 0, 0)
+                with open("window{0}-img{1}.png".format(wname, 'corners'), 'wb') as f: f.write(img.getvalue())
+                self.sendCommand('displayImage', window=wname, image=img)
+                self.wait()
+
+                bw = 10
+                mask2 = cv2.copyMakeBorder(mask, top=bw, bottom=bw, left=bw, right=bw, borderType=cv2.BORDER_CONSTANT, value=[255, 255, 255] )
+                #mask2 = mask.copy()
+
+                (cnts, x) = cv2.findContours(mask2, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                logger.info("Found %s contours", len(cnts))
+                cnts = sorted(cnts, key = cv2.contourArea, reverse = True)[1:2]
+                #cv2.drawContours(mask2, cnts, -1, (255,0,0), 2)
+
+                mask2 = np.zeros(mask.shape, np.uint8)
+                cv2.fillPoly(mask2, pts=cnts, color=(255,255,255))
+                self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(mask2))
+                cv2.imwrite("window{0}-img{1}.png".format(wname, '-contours'), mask2)
+                self.wait(1)
+                logger.debug("Finished screen %s", wname)
                 self.sendCommand('displayColor', window=wname, color='#000')
-
 
                 #img = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,11,2)
                 #img = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY,11,2)
@@ -349,6 +424,45 @@ class WorkerThread(Thread):
             logger.error(traceback.format_exc())
         finally:
             self.sendCommand('exit')
+            exit()
+
+
+    def findCorners(self, img):
+        blocksize = 2
+        sobel = 3
+        free = 0.04
+        points = []
+
+        #gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
+        gray = np.float32(img)
+        dst = cv2.cornerHarris(gray, blocksize, sobel, free)
+
+        logger.debug(dst.max())
+        th = dst.max() * 0.005
+
+        for i in range(len(dst)):
+            for j in range(len(dst[i])):
+                val = dst[i][j]
+                if val > th:
+                    # logger.debug("%s %s: %s", i, j, val)
+                    points.append((j, i))
+
+        return points
+
+
+    def findChessboard(self, img, cnrx, cnry):
+        logger.info("Looking for %s x %s inside corners", cnrx, cnry)
+
+        status, data = cv2.findChessboardCorners(img, (cnrx, cnry), flags=cv2.cv.CV_CALIB_CB_ADAPTIVE_THRESH)
+        if status == False:
+            logger.error("Failed to parse checkerboard pattern in image")
+            raise NotFoundError("Failed to parse checkerboard pattern in image")
+
+        logger.info("Checkerboard found")
+        vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        cv2.drawChessboardCorners(vis, (cnrx, cnry), data, status)
+        return vis
+
 
     def acquireImage(self, imgname, width, height):
         img = img_string_to_cv(self.camera.acquireImage(imgname))
@@ -361,13 +475,13 @@ class WorkerThread(Thread):
 
     def wait(self, sleep=0):
         time.sleep(sleep)
-        if self.args.autorun:
-            return
-        logger.debug('worker sleep')
-        with self.cond:
-            self.cond.wait()
-        logger.debug('worker wake')
+        if not self.args.autorun:
+            logger.debug('worker sleep')
+            with self.cond:
+                self.cond.wait()
+            logger.debug('worker wake')
         if self._want_abort:
+            logger.debug('worker aborted')
             exit()
 
 
@@ -404,10 +518,63 @@ class WorkerThread(Thread):
 
             draw.draw(image)
             blob = image.make_blob('png')
+        return cStringIO.StringIO(blob)
 
-            return cStringIO.StringIO(blob)
+
+def draw_points(points, width, height, xoff, yoff):
+    image = wand.image.Image(width=width, height=height, background=wand.color.Color('#fff'))
+
+    with wand.drawing.Drawing() as draw:
+        draw.fill_color = wand.color.Color('#f00')
+        for p in range(len(points)):
+            # draw.fill_color = wand.color.Color('#{0:x}{0:x}{0:x}'.format(r*2))
+            x = points[p][0] + xoff
+            y = points[p][1] + yoff
+            draw_point(draw, x, y)
+
+        draw.draw(image)
+        blob = image.make_blob('png')
+    return cStringIO.StringIO(blob)
 
 
+def draw_grid(grid, width, height, xoff, yoff):
+    image = wand.image.Image(width=width, height=height, background=wand.color.Color('#fff'))
+
+    with wand.drawing.Drawing() as draw:
+        draw.fill_color = wand.color.Color('#f00')
+        for r in range(len(grid)):
+            # draw.fill_color = wand.color.Color('#{0:x}{0:x}{0:x}'.format(r*2))
+            for c in range(len(grid[r])):
+                #logger.info("r: %s, c: %s", r, c)
+                x = grid[r][c][0] + xoff
+                y = grid[r][c][1] + yoff
+                draw_point(draw, x, y)
+
+        draw.draw(image)
+        blob = image.make_blob('png')
+    return cStringIO.StringIO(blob)
+
+
+def draw_point(draw, x, y):
+    draw.point(x, y)
+    draw.point(x+1, y)
+    draw.point(x-1, y)
+    draw.point(x, y+1)
+    draw.point(x, y-1)
+
+
+def draw_text(text, width, height):
+    font_size = 400
+    image = wand.image.Image(width=width, height=height, background=wand.color.Color('#fff'))
+    with wand.drawing.Drawing() as draw:
+        draw.fill_color = wand.color.Color('#000')
+        draw.font_size = font_size
+        draw.text_alignment = 'center'
+        draw.text(width/2, height/2+font_size/2, text)
+
+        draw.draw(image)
+        blob = image.make_blob('png')
+    return cStringIO.StringIO(blob)
 
 
 def img_string_to_cv(string):
