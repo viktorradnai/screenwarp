@@ -48,12 +48,15 @@ class AndroidIPCamera:
             logger.error("Failed to get image from IP Webcam, service returned status %s", res.status_code)
             return False
 
+        path = 'cache/{0}.jpg'.format(imgname)
+        with open(path, 'wb') as f:
+            f.write(res.content)
         return res.content
 
 
 class FileCacheCamera:
     def acquireImage(self, imgname):
-        path = 'cache/{0}'.format(imgname)
+        path = 'cache/{0}.jpg'.format(imgname)
         logger.info("Loading image from %s", path)
         with open(path, 'rb') as f:
             return f.read()
@@ -128,6 +131,9 @@ class MainApp(wx.App):
         args = self.parseCmdline()
         self.args = args
 
+        with open('cache/views.json') as f:
+            self.views = json.load(f)['views']
+
         if args.usecache:
             try:
                 with open('cache/screens.json') as f:
@@ -143,7 +149,7 @@ class MainApp(wx.App):
             A display may be made of more than one screen, eg. if using Xinerama
             or a hardware solution such as a Matrox TripleHead2Go
         """
-        for dname in displays.keys():
+        for dname in displays:
             size = ( displays[dname]['width'], displays[dname]['height'] )
             # Hack to position windows sensibly in cache mode
             topleft = (0, 0) if args.usecache else ( displays[dname]['top'], displays[dname]['left'] )
@@ -157,7 +163,7 @@ class MainApp(wx.App):
 
             screens = self.getScreens(dname, size[0], size[1])
 
-            for sname in screens.keys():
+            for sname in screens:
                 size = ( screens[sname]['width'], screens[sname]['height'] )
                 logger.info('Creating frame for screen "%s" in window %s with size %s x %s offset %s %s', sname, title, size[0], size[1], topleft[0], topleft[1])
                 #frame = ScreenFrame(self, window, -1, "Screen "+sname, screens[sname]['topleft'], size)
@@ -166,7 +172,7 @@ class MainApp(wx.App):
 
             self.screens.update(screens)
             window.Show()
-        self.worker = WorkerThread(self, self.screens, args, self.cond)
+        self.worker = WorkerThread(self, self.views, self.screens, args, self.cond)
         return True
 
 
@@ -274,10 +280,11 @@ class MainApp(wx.App):
 
 
 class WorkerThread(Thread):
-    def __init__(self, gui, windows, args, cond):
+    def __init__(self, gui, views, screens, args, cond):
         Thread.__init__(self)
         self.gui = gui
-        self.screens = windows
+        self.views = views
+        self.screens = screens
         self._want_abort = 0
         self.args = args
         self.cond = cond
@@ -294,129 +301,116 @@ class WorkerThread(Thread):
         cnrx = rows - 1
         cnry = cols - 1
         try:
-            for wname in self.screens.keys():
-                w = self.screens[wname]
-                screenid = draw_text(wname, w['width'], w['height'])
-                self.sendCommand('displayImage', window=wname, image=screenid)
+            # Identify each screen
+            for sname in self.screens:
+                w = self.screens[sname]
+                screenid = draw_text(sname, w['width'], w['height'])
+                self.sendCommand('displayImage', window=sname, image=screenid)
             self.wait(1)
 
-            for wname in self.screens.keys():
-                w = self.screens[wname]
-                self.sendCommand('displayColor', window=wname, color='#000')
+            # Black out all screens
+            for sname in self.screens:
+                w = self.screens[sname]
+                self.sendCommand('displayColor', window=sname, color='#000')
 
-            logger.debug(self.screens)
-            for wname in self.screens.keys():
-                w = self.screens[wname]
+            # Take a photo of each screen from each view, then process them
+            for vname, view in self.views.iteritems():
+                for sname in self.screens:
+                    w = self.screens[sname]
 
-                if wname not in self.args.displays:
-                    logger.info("Skipping display %s", wname)
-                    continue
+                    if sname not in self.args.displays:
+                        logger.info("Skipping display %s", sname)
+                        continue
 
-                logger.info("Processing display %s", wname)
-                self.wait()
+                    if sname in view['completeScreens']:
+                        primaryView = True
+                    elif sname in view['partialScreens']:
+                        secondaryView = True
+                    else:
+                        logger.info("Display %s not visible in %s", sname, vname)
+                        continue
 
-                cb = self.drawChessboard(w['width'], w['height'], rows, cols, '#fff', '#000')
-                with open('cb1.png', 'wb') as f: f.write(cb.getvalue())
-                self.sendCommand('displayImage', window=wname, image=cb)
-                self.wait()
-
-                img1 = self.acquireImage("window{0}-img{1}.png".format(wname, 1), w['width'], w['height'])
-                self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(img1))
-                self.wait()
-
-                cb = self.drawChessboard(w['width'], w['height'], rows, cols, '#000', '#fff')
-                with open('cb2.png', 'wb') as f: f.write(cb.getvalue())
-                self.sendCommand('displayImage', window=wname, image=cb)
-                self.wait()
-
-                img2 = self.acquireImage("window{0}-img{1}.png".format(wname, 2), w['width'], w['height'])
-                self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(img2))
-                self.wait()
-
-
-                img = cv2.subtract(img1, img2)
-                self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(img))
-                cv2.imwrite("window{0}-img{1}.png".format(wname, 3), img)
-                imgdiff1 = img
-                self.wait()
-
-                img = cv2.subtract(img2, img1)
-                self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(img))
-                cv2.imwrite("window{0}-img{1}.png".format(wname, 4), img)
-                imgdiff2 = img
-                self.wait()
-
-                imgdiff = cv2.add(imgdiff1, imgdiff2)
-                self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(imgdiff))
-                cv2.imwrite("window{0}-img{1}.png".format(wname, 'diff'), imgdiff)
-                self.wait()
-
-                img = cv2.cvtColor(imgdiff, cv2.COLOR_BGR2GRAY)
-                img = cv2.medianBlur(img, 13)
-                #blur = cv2.GaussianBlur(img,(5,5),0)
-                ret, mask = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
-                self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(mask))
-                cv2.imwrite("window{0}-img{1}.png".format(wname, 'mask'), mask)
-                self.wait()
-
-
-                img = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-                ret, img1a = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
-                #img = cv2.add(img, mask)
-                self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(img))
-                cv2.imwrite("window{0}-img{1}.png".format(wname, 7), img1a)
-                self.wait()
-
-                try:
-                    vis = self.findChessboard(img1a, cnrx, cnry)
-                    self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(vis))
-                    cv2.imwrite("window{0}-img{1}.png".format(wname, '-chess1'), vis)
+                    self.currView = vname
+                    self.currScreen = sname
+                    logger.info("Processing view %s, display %s", vname, sname)
                     self.wait()
-                except NotFoundError:
-                    pass
 
-                img = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-                ret, img2a = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
-                #img = cv2.add(img, mask)
-                self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(img2a))
-                cv2.imwrite("window{0}-img{1}.png".format(wname, 8), img)
-                self.wait()
+                    # Display chessboard image then take a photo
+                    cb = self.drawChessboard(w['width'], w['height'], rows, cols, '#fff', '#000')
+                    self.putImage(cb, 'cb1')
+                    img1 = self.acquireImage(vname, sname, 1, w['width'], w['height'])
+                    self.putImage(img1, 'img1')
 
-                try:
-                    vis = self.findChessboard(img2a, cnrx, cnry)
-                    self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(vis))
-                    cv2.imwrite("window{0}-img{1}.png".format(wname, '-chess2'), vis)
+                    # Display inverted chessboard image, take another photo
+                    cb = self.drawChessboard(w['width'], w['height'], rows, cols, '#000', '#fff')
+                    self.putImage(cb, 'cb2')
+                    img2 = self.acquireImage(vname, sname, 2, w['width'], w['height'])
+                    self.putImage(img2, 'img2')
+
+                    # Subtract two photos from each other to black out non-display areas
+                    imgdiff1 = cv2.subtract(img1, img2)
+                    self.putImage(imgdiff1, 'imgdiff1')
+                    imgdiff2 = cv2.subtract(img2, img1)
+                    self.putImage(imgdiff2, 'imgdiff2')
+
+                    # Add two diff images together to fill visible area, then threshold it to create mask
+                    imgdiff = cv2.add(imgdiff1, imgdiff2)
+                    self.putImage(imgdiff, 'imgdiff')
+                    img = cv2.cvtColor(imgdiff, cv2.COLOR_BGR2GRAY)
+                    img = cv2.medianBlur(img, 13)
+                    ret, mask = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+                    self.putImage(mask, 'mask')
+
+                    # Mask out everything other than the chessboard area, do detection
+                    img1m = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+                    ret, img1a = cv2.threshold(img1m, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+                    img1m = cv2.add(img1m, mask)
+                    self.putImage('imgdiff1-masked', img1m)
+
+                    try:
+                        vis = self.findChessboard(img1m, cnrx, cnry)
+                        self.putImage(vis, 'imgdiff1-cb')
+                    except NotFoundError:
+                        # TODO: try harder to find what's left of the chessboard
+                        pass
+
+                    img2m = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+                    ret, img2m = cv2.threshold(img2m, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+                    img2m = cv2.add(img, mask)
+                    self.putImage('imgdiff2-masked', img2m)
+
+                    try:
+                        vis = self.findChessboard(img2a, cnrx, cnry)
+                        self.putImage(vis, 'imgdiff2-cb')
+                    except NotFoundError:
+                        pass
+
+                    points = self.findCorners(img)
+                    img = draw_points(points, img.shape[1], img.shape[0], 0, 0)
+                    with open("window{0}-img{1}.png".format(sname, 'corners'), 'wb') as f: f.write(img.getvalue())
+                    self.sendCommand('displayImage', window=sname, image=img)
                     self.wait()
-                except NotFoundError:
-                    pass
-                self.wait()
 
-                points = self.findCorners(img)
-                img = draw_points(points, img.shape[1], img.shape[0], 0, 0)
-                with open("window{0}-img{1}.png".format(wname, 'corners'), 'wb') as f: f.write(img.getvalue())
-                self.sendCommand('displayImage', window=wname, image=img)
-                self.wait()
+                    bw = 10
+                    mask2 = cv2.copyMakeBorder(mask, top=bw, bottom=bw, left=bw, right=bw, borderType=cv2.BORDER_CONSTANT, value=[255, 255, 255] )
+                    #mask2 = mask.copy()
 
-                bw = 10
-                mask2 = cv2.copyMakeBorder(mask, top=bw, bottom=bw, left=bw, right=bw, borderType=cv2.BORDER_CONSTANT, value=[255, 255, 255] )
-                #mask2 = mask.copy()
+                    (cnts, x) = cv2.findContours(mask2, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                    logger.info("Found %s contours", len(cnts))
+                    cnts = sorted(cnts, key = cv2.contourArea, reverse = True)[1:2]
+                    #cv2.drawContours(mask2, cnts, -1, (255,0,0), 2)
 
-                (cnts, x) = cv2.findContours(mask2, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-                logger.info("Found %s contours", len(cnts))
-                cnts = sorted(cnts, key = cv2.contourArea, reverse = True)[1:2]
-                #cv2.drawContours(mask2, cnts, -1, (255,0,0), 2)
+                    mask2 = np.zeros(mask.shape, np.uint8)
+                    cv2.fillPoly(mask2, pts=cnts, color=(255,255,255))
+                    self.sendCommand('displayImage', window=sname, image=img_cv_to_stringio(mask2))
+                    cv2.imwrite("window{0}-img{1}.png".format(sname, '-contours'), mask2)
+                    self.wait(1)
+                    logger.debug("Finished screen %s", sname)
+                    self.sendCommand('displayColor', window=sname, color='#000')
 
-                mask2 = np.zeros(mask.shape, np.uint8)
-                cv2.fillPoly(mask2, pts=cnts, color=(255,255,255))
-                self.sendCommand('displayImage', window=wname, image=img_cv_to_stringio(mask2))
-                cv2.imwrite("window{0}-img{1}.png".format(wname, '-contours'), mask2)
-                self.wait(1)
-                logger.debug("Finished screen %s", wname)
-                self.sendCommand('displayColor', window=wname, color='#000')
-
-                #img = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,11,2)
-                #img = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY,11,2)
-                #img3 = cv2.fastNlMeansDenoising(img3,None,40,17,31)
+                    #img = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,11,2)
+                    #img = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY,11,2)
+                    #img3 = cv2.fastNlMeansDenoising(img3,None,40,17,31)
 
 
         except Exception as e:
@@ -425,6 +419,7 @@ class WorkerThread(Thread):
         finally:
             self.sendCommand('exit')
             exit()
+
 
 
     def findCorners(self, img):
@@ -464,13 +459,30 @@ class WorkerThread(Thread):
         return vis
 
 
-    def acquireImage(self, imgname, width, height):
+    def acquireImage(self, view, screen, seq, width, height):
+        imgname = "view{0}-screen{1}-img{2}".format(view, screen, seq)
         img = img_string_to_cv(self.camera.acquireImage(imgname))
         if img is None:
             raise ImageCaptureError("Failed to read image %s", imgname)
         img = img_cv_resize(img, width, height, 'outer')
-        cv2.imwrite(imgname, img)
         return img
+
+
+    def putImage(self, img, name, wait=0, view=None, screen=None):
+        if view is None: view=self.currView
+        if screen is None: screen=self.currScreen
+
+        path = "view{0}-screen{0}-img{1}.png".format(view, screen, name)
+        logger.debug("Image %s is a %s", path, type(img).__name__)
+
+        if type(img).__name__ == 'StringI':
+            with open(path, 'wb') as f: f.write(img.getvalue())
+            self.sendCommand('displayImage', window=screen, image=img)
+        elif isinstance(img, np.ndarray):
+            cv2.imwrite(path, img)
+            self.sendCommand('displayImage', window=screen, image=img_cv_to_stringio)
+
+        self.wait(wait)
 
 
     def wait(self, sleep=0):
