@@ -296,10 +296,10 @@ class WorkerThread(Thread):
 
 
     def run(self):
-        rows = 40
-        cols = 24
-        cnrx = rows - 1
-        cnry = cols - 1
+        cols = 40
+        rows = 24
+        cnrx = cols - 1
+        cnry = rows - 1
         try:
             # Identify each screen
             for sname in self.screens:
@@ -335,17 +335,7 @@ class WorkerThread(Thread):
                     logger.info("Processing view %s, display %s", vname, sname)
                     self.wait()
 
-                    # Display chessboard image then take a photo
-                    cb = self.drawChessboard(w['width'], w['height'], rows, cols, '#fff', '#000')
-                    self.putImage(cb, 'cb1')
-                    img1 = self.acquireImage(vname, sname, 1, w['width'], w['height'])
-                    self.putImage(img1, 'img1')
-
-                    # Display inverted chessboard image, take another photo
-                    cb = self.drawChessboard(w['width'], w['height'], rows, cols, '#000', '#fff')
-                    self.putImage(cb, 'cb2')
-                    img2 = self.acquireImage(vname, sname, 2, w['width'], w['height'])
-                    self.putImage(img2, 'img2')
+                    img1, img2 = self.acquireCheckboards(vname, sname, w['width'], w['height'], cols, rows)
 
                     # Subtract two photos from each other to black out non-display areas
                     imgdiff1 = cv2.subtract(img1, img2)
@@ -354,6 +344,7 @@ class WorkerThread(Thread):
                     self.putImage(imgdiff2, 'imgdiff2')
 
                     mask = self.getMask(imgdiff1, imgdiff2)
+                    self.isMaskOnEdge(mask)
 
                     # Mask out everything other than the chessboard area, do detection
                     img1m = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
@@ -362,8 +353,7 @@ class WorkerThread(Thread):
                     self.putImage(img1m, 'diff1-masked')
 
                     try:
-                        vis = self.findChessboard(img1m, cnrx, cnry)
-                        self.putImage(vis, 'imgdiff1-cb')
+                        coords = self.findChessboard(img1m, 'imgdiff1-cb', cnrx, cnry)
                     except NotFoundError:
                         # TODO: try harder to find what's left of the chessboard
                         pass
@@ -374,8 +364,7 @@ class WorkerThread(Thread):
                     self.putImage(img2m, 'diff2-masked')
 
                     try:
-                        vis = self.findChessboard(img2m, cnrx, cnry)
-                        self.putImage(vis, 'imgdiff2-cb')
+                        coords = self.findChessboard(img2m, 'imgdiff2-cb', cnrx, cnry)
                     except NotFoundError:
                         pass
 
@@ -399,8 +388,27 @@ class WorkerThread(Thread):
             exit()
 
 
-    def getMask(self, img1, img2):
+    def acquireCheckboards(self, view, screen, width, height, cols, rows, x=0, y=0, square_width=None, square_height=None):
+        # Display chessboard image then take a photo
+        cb = self.drawChessboard(width, height, cols, rows, '#fff', '#000', x, y, square_width, square_height)
+        self.putImage(cb, 'cb1')
 
+        imgname = "view{0}-screen{1}-cb{2}x{3}-img{4}".format(view, screen, rows, cols, 1)
+        img1 = self.acquireImage(imgname, width, height)
+        self.putImage(img1, 'img1')
+
+        # Display inverted chessboard image, take another photo
+        cb = self.drawChessboard(width, height, cols, rows, '#000', '#fff', x, y, square_width, square_height)
+        self.putImage(cb, 'cb2')
+
+        imgname = "view{0}-screen{1}-cb{2}x{3}-img{4}".format(view, screen, rows, cols, 2)
+        img2 = self.acquireImage(imgname, width, height)
+        self.putImage(img2, 'img2')
+
+        return img1, img2
+
+
+    def getMask(self, img1, img2):
             # Add two diff images together to fill visible area, then threshold it to create mask
             imgdiff = cv2.add(img1, img2)
             self.putImage(imgdiff, 'imgdiff')
@@ -415,17 +423,34 @@ class WorkerThread(Thread):
             maskb = cv2.copyMakeBorder(mask, top=border, bottom=border, left=border, right=border, borderType=cv2.BORDER_CONSTANT, value=[255, 255, 255] )
 
             (cnts, x) = cv2.findContours(maskb, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-            logger.info("Found %s contours", len(cnts))
+            logger.info("Found %s contours in mask image", len(cnts))
             cnts = sorted(cnts, key = cv2.contourArea, reverse = True)[1:2]
             #cv2.drawContours(mask2, cnts, -1, (255,0,0), 2)
 
-            mask2 = np.zeros(maskb.shape, np.uint8)
-            mask2[:] = (255)
+            mask2 = np.full(maskb.shape, 255, np.uint8)
             cv2.fillPoly(mask2, pts=cnts, color=(0,0,0))
             mask2 = mask2[border:-border, border:-border]
             self.putImage(mask2, 'mask2')
-            logger.debug(mask2.shape)
+
             return mask2
+
+
+    def isMaskOnEdge(self, mask):
+        found = 0
+        if 0 in mask[0]:
+            logger.warn("View %s screen %s mask reaches top edge", self.currView, self.currScreen)
+            found += 1
+        if 0 in mask[-1]:
+            logger.warn("View %s screen %s mask reaches bottom edge", self.currView, self.currScreen)
+            found += 1
+        if 0 in mask[:, [0]]:
+            logger.warn("View %s screen %s mask reaches left edge", self.currView, self.currScreen)
+            found += 1
+        if 0 in mask[:, [-1]]:
+            logger.warn("View %s screen %s mask reaches right edge", self.currView, self.currScreen)
+            found += 1
+
+        return bool(found)
 
 
     def findCorners(self, img):
@@ -436,6 +461,8 @@ class WorkerThread(Thread):
 
         #gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
         gray = np.float32(img)
+
+        gray = cv2.dilate(gray,None)
         dst = cv2.cornerHarris(gray, blocksize, sobel, free)
 
         logger.debug(dst.max())
@@ -448,10 +475,16 @@ class WorkerThread(Thread):
                     # logger.debug("%s %s: %s", i, j, val)
                     points.append((j, i))
 
-        return points
+        logger.debug(dst.shape)
+        #dst = cv2.cvtColor(dst,cv2.COLOR_BGR2GRAY)
+        dst = np.uint8(dst)
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.001)
+        corners = np.float32(points)
+        cv2.cornerSubPix(dst, corners, (5,5), (-1,-1), criteria)
+        return corners
 
 
-    def findChessboard(self, img, cnrx, cnry):
+    def findChessboard(self, img, name, cnrx, cnry):
         logger.info("Looking for %s x %s inside corners", cnrx, cnry)
 
         status, data = cv2.findChessboardCorners(img, (cnrx, cnry), flags=cv2.cv.CV_CALIB_CB_ADAPTIVE_THRESH)
@@ -462,11 +495,11 @@ class WorkerThread(Thread):
         logger.info("Checkerboard found")
         vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         cv2.drawChessboardCorners(vis, (cnrx, cnry), data, status)
-        return vis
+        self.putImage(vis, name)
+        return data
 
 
-    def acquireImage(self, view, screen, seq, width, height):
-        imgname = "view{0}-screen{1}-img{2}".format(view, screen, seq)
+    def acquireImage(self, imgname, width, height):
         img = img_string_to_cv(self.camera.acquireImage(imgname))
         if img is None:
             raise ImageCaptureError("Failed to read image %s", imgname)
@@ -520,23 +553,27 @@ class WorkerThread(Thread):
         wx.PostEvent(self.gui, CommandEvent(res))
 
 
-    def drawChessboard(self, screen_width, screen_height, cols, rows, color1='#fff', color2='#000'):
-        square_width = screen_width / cols
-        square_height = screen_height / rows
+    def drawChessboard(self, screen_width, screen_height, cols, rows, color1='#fff', color2='#000', x=0, y=0, square_width=None, square_height=None, bgcolor='#000'):
+        if square_width is None: square_width = (screen_width-x) / cols
+        if square_height is None: square_height = (screen_height-y) / rows
 
-        image = wand.image.Image(width=screen_width, height=screen_height, background=wand.color.Color(color1))
+        image = wand.image.Image(width=screen_width, height=screen_height, background=wand.color.Color(bgcolor))
         with wand.drawing.Drawing() as draw:
             draw.fill_color = wand.color.Color(color2)
             draw.color = wand.color.Color(color2)
             for r in range(rows):
                 for c in range(cols):
-                    if not (c + r) % 2:
-                        continue
-                    x = square_width * c
-                    y = square_height * r
+                    if (c + r) % 2:
+                        draw.fill_color = wand.color.Color(color2)
+                        draw.color = wand.color.Color(color2)
+                    else:
+                        draw.fill_color = wand.color.Color(color1)
+                        draw.color = wand.color.Color(color1)
+                    x2 = x + square_width * c
+                    y2 = y + square_height * r
 
                     # logger.debug("%s %s %s %s", x, y, square_width, square_height)
-                    draw.rectangle(x, y, width=square_width-1, height=square_height-1)
+                    draw.rectangle(x2, y2, width=square_width-1, height=square_height-1)
 
             draw.draw(image)
             blob = image.make_blob('png')
