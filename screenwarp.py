@@ -1,7 +1,7 @@
 #!/usr/bin/python
 
 import cv2
-import numpy
+import numpy as np
 import wand.image
 import wand.color
 import wand.drawing
@@ -48,15 +48,8 @@ def main():
     cols = args.cols + 1
     rows = args.rows + 1
 
-    captured_grid = {}
-    for i in range(rows): captured_grid[i] = {}
-
-    corrected_grid = {}
-    for i in range(rows): corrected_grid[i] = {}
-
-    inverse_grid = {}
-    for i in range(rows): inverse_grid[i] = {}
-
+    corrected_grid = np.empty((rows, cols, 2))
+    inverse_grid = np.empty((rows, cols, 2))
 
     base_grid = get_base_grid(rows, cols, square_width, square_height)
 
@@ -68,39 +61,19 @@ def main():
         exit(1)
 
     logger.info("Looking for %s x %s inside corners", rows-2, cols-2)
-    status, data = cv2.findChessboardCorners(img, (rows-2, cols-2), flags=cv2.cv.CV_CALIB_CB_ADAPTIVE_THRESH)
+    status, captured_grid = cv2.findChessboardCorners(img, (cols-2, rows-2), flags=cv2.cv.CV_CALIB_CB_ADAPTIVE_THRESH)
     if status == False:
         logger.error("Failed to parse checkerboard pattern in image")
         exit(2)
 
     vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    cv2.drawChessboardCorners(vis, (rows-2, cols-2), data, status)
+    cv2.drawChessboardCorners(vis, (rows-2, cols-2), captured_grid, status)
     cv2.imwrite('chess.png', vis)
 
-    r = 1
-    c = 1
+    # create 2D array from 1D
+    captured_grid.shape = (rows-2, cols-2, 2)
 
-    for row in data:
-        captured_grid[r][cols-c-1] = [ row[0][0], row[0][1] ]
-        if r == (rows-2):
-            r = 1
-            c += 1
-        else:
-            r += 1
-
-    for i in range(1, cols-1):
-        captured_grid[0][i] = predict(captured_grid[1][i], captured_grid[2][i])
-        captured_grid[rows-1][i] = predict(captured_grid[rows-2][i], captured_grid[rows-3][i])
-
-    for i in range(1, rows-1):
-        captured_grid[i][0] = predict(captured_grid[i][1], captured_grid[i][2])
-        captured_grid[i][cols-1] = predict(captured_grid[i][cols-2], captured_grid[i][cols-3])
-
-    captured_grid[0][0] = predict(captured_grid[1][1], captured_grid[2][2])
-    captured_grid[rows-1][0] = predict(captured_grid[rows-2][1], captured_grid[rows-3][2])
-    captured_grid[0][cols-1] = predict(captured_grid[1][cols-2], captured_grid[2][cols-3])
-    captured_grid[rows-1][cols-1] = predict(captured_grid[rows-2][cols-2], captured_grid[rows-3][cols-3])
-
+    captured_grid = grow_grid(captured_grid)
 
     draw_grid("out1.png", captured_grid, 1280+20, 768+20, 10, 10)
 
@@ -137,11 +110,9 @@ def main():
     draw_grid("out3.png", corrected_grid, 1280+20, 768+20, 10, 10)
     for r in range(rows-1, -1, -1):
         for c in range(cols):
-
-            logger.info(corrected_grid[r][c])
             inverse_grid[r][c] = predict(base_grid[r][c], corrected_grid[r][c])
-            logger.info("[%s][%s] %s -> %s -> %s", r, c, corrected_grid[r][c][0], base_grid[r][c][0], inverse_grid[r][c][0])
-            logger.info("[%s][%s] %s -> %s -> %s", r, c, corrected_grid[r][c][1], base_grid[r][c][1], inverse_grid[r][c][1])
+            #logger.debug("[%s][%s] %s -> %s -> %s", r, c, corrected_grid[r][c][0], base_grid[r][c][0], inverse_grid[r][c][0])
+            #logger.debug("[%s][%s] %s -> %s -> %s", r, c, corrected_grid[r][c][1], base_grid[r][c][1], inverse_grid[r][c][1])
 
     draw_grid("out4.png", inverse_grid, 1280+20, 768+20, 10, 10)
 
@@ -157,9 +128,10 @@ def main():
 
     exit(0)
 
+
 def predict(curr, prev):
     delta = map(operator.sub, curr, prev)
-    logger.info(delta)
+    #logger.debug(delta)
     return map(operator.add, curr, delta)
 
 
@@ -189,16 +161,36 @@ def draw_point(draw, x, y):
 
 
 def get_base_grid(rows, cols, square_width, square_height):
-    base_grid = {}
+    base_grid = np.empty((rows, cols, 2))
     for r in range(rows):
         for c in range(cols):
-            #ci = cols - c -1
-            if not r in base_grid:
-                base_grid[r] = {}
-            base_grid[r][c] = [ c * square_width, r * square_height ]
+            base_grid[r][c] = ( c * square_width, r * square_height )
             # logger.debug("ref[%s][%s] = [ %s %s ]", r, ci, (r)*square_width, (c)*square_height)
 
     return base_grid
+
+
+def grow_grid(grid):
+    (rows, cols) = grid.shape[:2]
+    logger.debug(grid.shape[:2])
+    # expand by one for top, bottom, left and right
+    grid = np.pad(grid, ((1,1), (1,1), (0,0)), mode='constant', constant_values=0)
+
+    # calculate the missing edge points based on the inner points
+    for i in range(1, cols-1):
+        grid[0][i] = predict(grid[1][i], grid[2][i])
+        grid[rows-1][i] = predict(grid[rows-2][i], grid[rows-3][i])
+
+    for i in range(1, rows-1):
+        grid[i][0] = predict(grid[i][1], grid[i][2])
+        grid[i][cols-1] = predict(grid[i][cols-2], grid[i][cols-3])
+
+    grid[0][0] = predict(grid[1][1], grid[2][2])
+    grid[rows-1][0] = predict(grid[rows-2][1], grid[rows-3][2])
+    grid[0][cols-1] = predict(grid[1][cols-2], grid[2][cols-3])
+    grid[rows-1][cols-1] = predict(grid[rows-2][cols-2], grid[rows-3][cols-3])
+
+    return grid
 
 
 def get_contained_box(grid):
