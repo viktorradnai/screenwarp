@@ -39,21 +39,27 @@ def parse_cmdline():
 
 def main():
     args = parse_cmdline()
-
+    # Width and height of the screen
     screen_width = args.width
     screen_height = args.height
 
+    # Width and height of each square
     square_width = screen_width / args.cols
     square_height = screen_height / args.rows
+
+    # Width and height of the grid area, which may be smaller than the screen
+    grid_width = square_width * args.cols
+    grid_height = square_height * args.rows
+
     cols = args.cols + 1
     rows = args.rows + 1
 
-    corrected_grid = np.empty((rows, cols, 2))
-    inverse_grid = np.empty((rows, cols, 2))
+    corrected_grid = np.empty((rows, cols, 2), np.float32)
+    inverse_grid = np.empty((rows, cols, 2), np.float32)
 
     base_grid = get_base_grid(rows, cols, square_width, square_height)
 
-    draw_grid("out0.png", base_grid, 1280+20, 720+20, 10, 10)
+    draw_grid("out0.png", base_grid, screen_width+20, screen_height+20, 10, 10)
 
     img = cv2.imread(args.infile, 0)
     if img is None:
@@ -75,7 +81,7 @@ def main():
 
     captured_grid = grow_grid(captured_grid)
 
-    draw_grid("out1.png", captured_grid, 1280+20, 768+20, 10, 10)
+    draw_grid("out1.png", captured_grid, screen_width+20, screen_height+20, 10, 10)
 
     if args.align:
         # The bottom edge is the line we consider "straight". Straighten image using bottom edge as ref and align to bottom of pic
@@ -84,20 +90,18 @@ def main():
             for r in range(rows):
                 corrected_grid[r][c] = [ captured_grid[r][c][0], captured_grid[r][c][1] - offset[1] + screen_height ]
     else:
-        for c in range(cols):
-            for r in range(rows):
-                corrected_grid[r][c] = [ captured_grid[r][c][0], captured_grid[r][c][1] ]
+        corrected_grid = captured_grid.copy()
 
-    draw_grid("out2.png", corrected_grid, 1280+20, 768+20, 10, 10)
+    draw_grid("out2.png", corrected_grid, screen_width+20, screen_height+20, 10, 10)
 
     mins, maxes = get_bounding_box(corrected_grid)
     logger.info("Edges: %s %s - %s %s", mins[0], mins[1], maxes[0], maxes[1])
     mins, maxes = get_contained_box(corrected_grid)
     logger.info("Edges: %s %s - %s %s", mins[0], mins[1], maxes[0], maxes[1])
-    edgex = mins[0] + (1280 -  maxes[0])
-    edgey = mins[1] + (720 -  maxes[1])
-    mulx = 1280 / (1280 - edgex)
-    muly = 720 / (720 - edgey)
+    edgex = mins[0] + (grid_width -  maxes[0])
+    edgey = mins[1] + (grid_height -  maxes[1])
+    mulx = grid_width / (grid_width - edgex)
+    muly = grid_height / (grid_height - edgey)
 
     logger.info("mulx: %s, muly = %s", mulx, muly)
 
@@ -107,7 +111,7 @@ def main():
             corrected_grid[r][c][0] = (corrected_grid[r][c][0] - mins[0]) * mulx
             corrected_grid[r][c][1] = (corrected_grid[r][c][1] - mins[1]) * muly
 
-    draw_grid("out3.png", corrected_grid, 1280+20, 768+20, 10, 10)
+    draw_grid("out3.png", corrected_grid, screen_width+20, screen_height+20, 10, 10)
     for r in range(rows-1, -1, -1):
         for c in range(cols):
             inverse_grid[r][c] = predict(base_grid[r][c], corrected_grid[r][c])
@@ -171,10 +175,11 @@ def get_base_grid(rows, cols, square_width, square_height):
 
 
 def grow_grid(grid):
-    (rows, cols) = grid.shape[:2]
-    logger.debug(grid.shape[:2])
     # expand by one for top, bottom, left and right
     grid = np.pad(grid, ((1,1), (1,1), (0,0)), mode='constant', constant_values=0)
+
+    (rows, cols) = grid.shape[:2]
+    logger.debug(grid.shape[:2])
 
     # calculate the missing edge points based on the inner points
     for i in range(1, cols-1):
