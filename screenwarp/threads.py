@@ -13,6 +13,7 @@ import cv2
 import traceback
 import numpy as np
 from threading import *
+import screenwarp.gui
 from screenwarp.camera import *
 from screenwarp.gui import *
 from screenwarp.draw import *
@@ -51,6 +52,8 @@ class WorkerThread(Thread):
 
 
     def run(self):
+        cols = 40
+        rows = 24
         try:
             # Take a photo of each screen from each view, then process them
             for vname, view in iter(sorted(self.views.iteritems())):
@@ -82,7 +85,7 @@ class WorkerThread(Thread):
 
 
                 for sname in self.screens:
-                    screen = self.screens[sname]
+                    w = self.screens[sname]
 
                     if sname not in self.args.displays:
                         logger.info("Skipping display %s", sname)
@@ -103,7 +106,15 @@ class WorkerThread(Thread):
                     logger.info("Processing view %s, display %s", vname, sname)
                     self.wait()
 
-                    self.calibrate(screen)
+                    mask, coords = self.doMaskAndCalibration(vname, sname, w['width'], w['height'], cols, rows)
+                    if True or coords is None:
+                        logger.warn("Failed to find coordinates for screen %s in view %s, trying to calibrate parts of the screen", sname, vname)
+                        self.doPartialCalibration(vname, sname, w['width'], w['height'], mask)
+
+                    if False: # this is an attempt to detect corners, it is currently much less reliable than findChessboard
+                        points = self.findCorners(img1m)
+                        img = draw_points(points, img1m.shape[1], img1m.shape[0], 0, 0)
+                        self.putImage(img, 'img1-points')
 
 
                     logger.debug("Finished screen %s", sname)
@@ -121,20 +132,6 @@ class WorkerThread(Thread):
             self.sendCommand('exit')
             exit()
 
-
-    def calibrate(self, screen):
-        cols = 40
-        rows = 24
-
-        mask, coords = self.doMaskAndCalibration(vname, sname, screen['width'], screen['height'], cols, rows)
-        if True or coords is None:
-            logger.warn("Failed to find coordinates for screen %s in view %s, trying to calibrate parts of the screen", sname, vname)
-            self.doPartialCalibration(vname, sname, screen['width'], screen['height'], mask)
-
-        if False: # this is an attempt to detect corners, it is currently much less reliable than findChessboard
-            points = self.findCorners(img1m)
-            img = draw_points(points, img1m.shape[1], img1m.shape[0], 0, 0)
-            self.putImage(img, 'img1-points')
 
 
     def doMaskAndCalibration(self, vname, sname, width, height, cols, rows, mask=None, x=0, y=0, square_width=None, square_height=None):
@@ -352,7 +349,7 @@ class WorkerThread(Thread):
 
     def acquireCheckboards(self, view, screen, width, height, cols, rows, x=0, y=0, square_width=None, square_height=None):
         # Display chessboard image then take a photo
-        cb = self.drawChessboard(width, height, cols, rows, '#fff', '#000', x, y, square_width, square_height)
+        cb = drawChessboard(width, height, cols, rows, '#fff', '#000', x, y, square_width, square_height)
         self.putImage(cb, 'cb1')
 
         imgname = "view{0}-screen{1}-cb{2}x{3}-img{4}".format(view, screen, rows, cols, 1)
@@ -363,7 +360,7 @@ class WorkerThread(Thread):
         self.putImage(img1, 'img1')
 
         # Display inverted chessboard image, take another photo
-        cb = self.drawChessboard(width, height, cols, rows, '#000', '#fff', x, y, square_width, square_height)
+        cb = drawChessboard(width, height, cols, rows, '#000', '#fff', x, y, square_width, square_height)
         self.putImage(cb, 'cb2')
 
         imgname = "view{0}-screen{1}-cb{2}x{3}-img{4}".format(view, screen, rows, cols, 2)
@@ -547,38 +544,5 @@ class WorkerThread(Thread):
         logger.debug("Sending command %s", action)
         res = kwargs
         res['action'] = action
-        wx.PostEvent(self.gui, CommandEvent(res))
+        wx.PostEvent(self.gui, screenwarp.gui.CommandEvent(res))
 
-
-def parseCmdline():
-    parser = argparse.ArgumentParser(description='''
-        TODO: insert description.'''
-    )
-    parser.add_argument('-v', '--verbose', action='store_true', help="Enable verbose output")
-    parser.add_argument('-q', '--quiet', action='store_true', help="Output errors only")
-
-    parser.add_argument('-a', '--autorun', action='store_true', help="Do not stop after each step")
-    parser.add_argument('-C', '--usecache', action='store_true', help="Use images from cache")
-
-    parser.add_argument('-W', '--width', type=int, help="Target screen width. This will be the width of the output image.", default=1920)
-    parser.add_argument('-H', '--height', type=int, help="Target screen height. This will be the height of the output image.", default=1080)
-    parser.add_argument('-c', '--cols', type=int, help="Number of squares per column", default=16)
-
-    parser.add_argument('-r', '--rows', type=int, help="Number of squares per row", default=9)
-    parser.add_argument('displays', metavar='N', nargs='+')
-
-    args = parser.parse_args()
-
-    if args.verbose: loglevel = logging.DEBUG
-    elif args.quiet: loglevel = logging.ERROR
-    else:            loglevel = logging.INFO
-
-    logging.basicConfig(level=loglevel, format='%(asctime)s %(levelname)s %(message)s')
-
-    return args
-
-if __name__ == '__main__':
-    __builtin__.args = parseCmdline()
-
-    app = MainApp(0)
-    app.MainLoop()
