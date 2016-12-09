@@ -24,8 +24,8 @@ def parse_cmdline():
     parser.add_argument('-r', '--rows', type=int, help="Number of squares per row", default=16)
     parser.add_argument('-c', '--cols', type=int, help="Number of inner corners per column", default=9)
     parser.add_argument('-a', '--align', action='store_true', help="Consider the bottom row of points as a reference line")
-    parser.add_argument('infile', help="Image file")
-    parser.add_argument('outfile', help="Image file")
+    parser.add_argument('infile', help="Input image to find the chessboard in")
+    parser.add_argument('outfile', help="Data file containing warp coordinates")
     args = parser.parse_args()
 
     if args.verbose: loglevel = logging.DEBUG
@@ -66,7 +66,7 @@ def main():
         logger.error("File '%s' could not be read", args.infile)
         exit(1)
 
-    logger.info("Looking for %s x %s inside corners", rows-2, cols-2)
+    logger.info("Looking for %s x %s inside corners", cols-2, rows-2)
     status, captured_grid = cv2.findChessboardCorners(img, (cols-2, rows-2), flags=cv2.cv.CV_CALIB_CB_ADAPTIVE_THRESH)
     if status == False:
         logger.error("Failed to parse checkerboard pattern in image")
@@ -114,7 +114,7 @@ def main():
     draw_grid("out3.png", corrected_grid, screen_width+20, screen_height+20, 10, 10)
     for r in range(rows-1, -1, -1):
         for c in range(cols):
-            inverse_grid[r][c] = predict(base_grid[r][c], corrected_grid[r][c])
+            inverse_grid[r][c] = extrapolate(base_grid[r][c], corrected_grid[r][c])
             #logger.debug("[%s][%s] %s -> %s -> %s", r, c, corrected_grid[r][c][0], base_grid[r][c][0], inverse_grid[r][c][0])
             #logger.debug("[%s][%s] %s -> %s -> %s", r, c, corrected_grid[r][c][1], base_grid[r][c][1], inverse_grid[r][c][1])
 
@@ -133,7 +133,7 @@ def main():
     exit(0)
 
 
-def predict(curr, prev):
+def extrapolate(curr, prev):
     delta = map(operator.sub, curr, prev)
     #logger.debug(delta)
     return map(operator.add, curr, delta)
@@ -183,17 +183,17 @@ def grow_grid(grid):
 
     # calculate the missing edge points based on the inner points
     for i in range(1, cols-1):
-        grid[0][i] = predict(grid[1][i], grid[2][i])
-        grid[rows-1][i] = predict(grid[rows-2][i], grid[rows-3][i])
+        grid[0][i] = extrapolate(grid[1][i], grid[2][i])
+        grid[rows-1][i] = extrapolate(grid[rows-2][i], grid[rows-3][i])
 
     for i in range(1, rows-1):
-        grid[i][0] = predict(grid[i][1], grid[i][2])
-        grid[i][cols-1] = predict(grid[i][cols-2], grid[i][cols-3])
+        grid[i][0] = extrapolate(grid[i][1], grid[i][2])
+        grid[i][cols-1] = extrapolate(grid[i][cols-2], grid[i][cols-3])
 
-    grid[0][0] = predict(grid[1][1], grid[2][2])
-    grid[rows-1][0] = predict(grid[rows-2][1], grid[rows-3][2])
-    grid[0][cols-1] = predict(grid[1][cols-2], grid[2][cols-3])
-    grid[rows-1][cols-1] = predict(grid[rows-2][cols-2], grid[rows-3][cols-3])
+    grid[0][0] = extrapolate(grid[1][1], grid[2][2])
+    grid[rows-1][0] = extrapolate(grid[rows-2][1], grid[rows-3][2])
+    grid[0][cols-1] = extrapolate(grid[1][cols-2], grid[2][cols-3])
+    grid[rows-1][cols-1] = extrapolate(grid[rows-2][cols-2], grid[rows-3][cols-3])
 
     return grid
 
