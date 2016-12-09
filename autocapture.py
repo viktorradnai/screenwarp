@@ -3,22 +3,20 @@
 import os
 import sys
 import time
-import json
-import errno
 import logging
 import argparse
 import cStringIO
-import subprocess
+import __builtin__
 
 import wx
 import cv2
-import wand.image
-import wand.color
-import wand.drawing
-import requests
 import traceback
 import numpy as np
 from threading import *
+from screenwarp.camera import *
+from screenwarp.gui import *
+from screenwarp.draw import *
+from screenwarp.util import *
 
 logger = logging.getLogger(__name__)
 
@@ -32,307 +30,15 @@ class ImageCaptureError(Exception):
 class NotFoundError(Exception):
     pass
 
-class Aborted(Exception):
-    pass
-
-class AndroidIPCamera:
-    def __init__(self, url):
-        self.url = url
-
-    def acquireImage(self, imgname, focus=False):
-        logger.debug("Using camera at %s", IMAGE_CAPTURE_URL)
-        if focus:
-            # focus to infinity, lock focus and exposure
-            requests.get(self.url + '/settings/focusmode?set=auto')
-            requests.get(self.url + '/settings/focus?set=on')
-            requests.get(self.url + '/settings/exposure_lock?set=on')
-            requests.get(self.url + '/settings/whitebalance_lock?set=on')
-            res = requests.get(self.url + '/photo.jpg')
-            requests.get(self.url + '/settings/focus?set=on')
-            requests.get(self.url + '/settings/focus?set=off')
-
-        else:
-            time.sleep(1) # Allow display to update
-            res = requests.get(self.url + '/photo.jpg')
-
-        logger.debug(res)
-        if not res:
-            logger.error("Failed to get image from IP Webcam, no response received")
-            return False
-        if res.status_code != 200:
-            logger.error("Failed to get image from IP Webcam, service returned status %s", res.status_code)
-            return False
-
-        path = 'cache/{0}.jpg'.format(imgname)
-        with open(path, 'wb') as f:
-            f.write(res.content)
-        return res.content
-
-
-class CommandLineCamera:
-    def __init__(self, command):
-        logger.debug("Using command %s to take photos", command)
-        self.command = command
-
-    def acquireImage(self, imgname, focus=False):
-        path = 'cache/{0}.jpg'.format(imgname)
-        command = self.command % (path)
-        logger.info("Capturing image %s using command line %", path, command)
-        subprocess.call(command, shell=True)
-        logger.debug("Loading image from %s", path)
-        with open(path, 'rb') as f:
-            return f.read()
-
-
-class FileCacheCamera:
-    def acquireImage(self, imgname, focus=False):
-        path = 'cache/{0}.jpg'.format(imgname)
-        logger.info("Loading image from %s", path)
-        with open(path, 'rb') as f:
-            return f.read()
-
-
-# Define notification event for thread completion
-EVT_COMMAND_ID = wx.NewId()
-
-def EVT_COMMAND(win, func):
-     """Define Result Event."""
-     win.Connect(-1, -1, EVT_COMMAND_ID, func)
-
-
-class CommandEvent(wx.PyEvent):
-     """Simple event to carry arbitrary result data."""
-     def __init__(self, data):
-         """Init Result Event."""
-         wx.PyEvent.__init__(self)
-         self.SetEventType(EVT_COMMAND_ID)
-         #logger.debug(data)
-         self.data = data
-
-
-class WindowFrame(wx.Frame):
-    pass
-
-class ScreenFrame(wx.Panel):
-
-    def __init__(self, *args, **kwargs):
-        # logger.debug(args)
-        self.parent = args[0]
-        super(ScreenFrame, self).__init__(*args[1:], **kwargs)
-        self.panel = wx.Panel(self, wx.ID_ANY, pos=(0, 0), size=self.GetSize(), style=wx.NO_BORDER)
-        self.panel.SetBackgroundColour("#000")
-        self.panel.Bind(wx.EVT_KEY_DOWN, self.parent.onKeyPress)
-        cursor = wx.StockCursor(wx.CURSOR_BLANK)
-        self.SetCursor(cursor)
-
-
-    def displayImage(self, image):
-        #logger.debug('displayImage')
-        for c in self.panel.GetChildren():
-            #logger.debug(c)
-            c.Destroy()
-        img = wx.ImageFromStream(image).ConvertToBitmap()
-        wx.StaticBitmap(self.panel, -1, img, (0, 0), (img.GetWidth(), img.GetHeight()))
-        self.panel.SetFocus()
-        self.SetFocus()
-        self.panel.Show()
-        self.Show()
-
-    def displayColor(self, color):
-        logger.debug('displayColor')
-        for c in self.panel.GetChildren():
-            #logger.debug(c)
-            c.Destroy()
-        self.panel.SetBackgroundColour(color)
-        self.panel.Show()
-
-
-class MainApp(wx.App):
-    screens = {}
-    windows = {} # WindowFrame objects
-    frames = {}  # ScreenFrame objects
-
-    def OnInit(self):
-        viewdb = 'views.json'
-        screendb = 'screens.json'
-        self.cond = Condition()
-
-        # Set up event handler for any worker thread results
-        EVT_COMMAND(self, self.onCommand)
-
-        args = self.parseCmdline()
-        self.args = args
-
-        with open(viewdb) as f:
-            logger.info("Using camera view definitions from %s", viewdb)
-            self.views = json.load(f)['views']
-
-        if os.path.isfile(screendb):
-            try:
-                logger.warn("Overriding screen definitions from %s", screendb)
-                with open(screendb) as f:
-                    displays = json.load(f)['displays']
-            except Exception as e:
-                logger.error("Caught exception, exiting")
-                logger.error(traceback.format_exc())
-        else:
-            displays = self.getDisplays()
-
-        """
-            Open windows in each display but create a frame for each screen.
-            A display may be made of more than one screen, eg. if using Xinerama
-            or a hardware solution such as a Matrox TripleHead2Go
-        """
-        for dname in displays:
-            d = displays[dname]
-            logger.debug(d)
-            size = ( d['width'], d['height'] )
-            # Hack to position windows sensibly in cache mode
-            topleft = (0, 0) if args.usecache else ( d['top'], d['left'] )
-
-            title = "Display "+dname
-            logger.info('Creating window "%s" on display %s with size %s x %s offset %s %s', title, dname, size[0], size[1], topleft[0], topleft[1])
-            window = WindowFrame(None, -1, title, topleft, size)
-            if not args.usecache and ('fullscreen' not in d or d['fullscreen']):
-                window.ShowFullScreen(True, style=wx.FULLSCREEN_ALL)
-            else:
-                # set the effective size of the display (not the size including title bar and borders)
-                window.SetClientSize(size)
-
-            self.windows[dname] = window
-            screens = self.getScreens(dname, size[0], size[1])
-
-            for sname in screens:
-                size = ( screens[sname]['width'], screens[sname]['height'] )
-                logger.info('Creating frame for screen "%s" in window %s with size %s x %s offset %s %s', sname, title, size[0], size[1], topleft[0], topleft[1])
-                frame = ScreenFrame(self, window, -1, screens[sname]['topleft'], size, style=wx.NO_BORDER)
-                self.frames[sname] = frame
-            self.screens.update(screens)
-            window.Show()
-        self.worker = WorkerThread(self, self.views, self.screens, args, self.cond)
-        return True
-
-
-    def getScreens(self, dname, width, height):
-        screens = {}
-        ar = height / (width / 16)
-        if ar < 9:
-
-            logger.debug("Multiscreen display detected, splitting")
-            cols = int(9 / ar)
-            width /= cols
-            logger.debug("Cols: %s", cols)
-            for i in range(cols):
-                screens["{0}-{1}".format(dname, i)] = { 'topleft': (width*i, 0), 'width': width, 'height': height }
-        elif ar > 12:
-            rows = int(ar / 9)
-            height /= rows
-            logger.debug("Rows: %s", rows)
-            for i in range(rows):
-                screens["{0}.{1}".format(dname, i)] = { 'topleft': (0, height*i), 'width': width, 'height': height }
-        else:
-            screens[dname] = { 'topleft': (0, 0), 'width': width, 'height': height }
-
-        return screens
-
-
-    def getDisplays(self):
-        displays = {}
-        # Find distinct displays, split aggretates if necessary
-        for i in range(wx.Display.GetCount()):
-            display = wx.Display(i)
-            geometry = display.GetGeometry()
-            topleft = geometry.GetTopLeft()
-            size = geometry.GetSize()
-            logger.info("Display %s has size %s x %s at offset %s %s", i, size[0], size[1], topleft[0], topleft[1])
-            displays["{0}".format(i)] = { 'top': topleft[0], 'left': topleft[1], 'width': size[0], 'height': size[1] }
-
-        return displays
-
-
-    def onKeyPress(self, event):
-        keycode = event.GetKeyCode()
-        print keycode
-        if keycode == wx.WXK_SPACE:
-            with self.cond:
-                self.cond.notify()
-        if keycode == wx.WXK_ESCAPE:
-            self.Close()
-            self.worker.abort()
-        event.Skip()
-
-
-    def onCommand(self, event):
-        if not event.data:
-            logger.error("No data received, exiting")
-            self.Close()
-        # logger.debug(event.data)
-        action = event.data['action']
-        logger.debug("Received command %s", action)
-        if action == 'displayImage':
-            self.frames[event.data['window']].displayImage(event.data['image'])
-        elif action == 'displayColor':
-            self.frames[event.data['window']].displayColor(event.data['color'])
-        elif action == 'exit':
-            self.Close()
-            return
-        else:
-            logger.error("Unknown action %s", action)
-            return
-
-        event.Skip()
-
-
-    def GetScreenPosition(self, wname):
-        if wname in self.windows:
-            return self.windows[wname].GetScreenPosition()
-        else: return None
-
-
-    def Close(self):
-        self.worker.abort()
-        for f in self.windows.values():
-            f.Close()
-            self.worker.join()
-
-
-    def parseCmdline(self):
-        parser = argparse.ArgumentParser(description='''
-            TODO: insert description.'''
-        )
-        parser.add_argument('-v', '--verbose', action='store_true', help="Enable verbose output")
-        parser.add_argument('-q', '--quiet', action='store_true', help="Output errors only")
-
-        parser.add_argument('-a', '--autorun', action='store_true', help="Do not stop after each step")
-        parser.add_argument('-C', '--usecache', action='store_true', help="Use images from cache")
-
-        parser.add_argument('-W', '--width', type=int, help="Target screen width. This will be the width of the output image.", default=1920)
-        parser.add_argument('-H', '--height', type=int, help="Target screen height. This will be the height of the output image.", default=1080)
-        parser.add_argument('-c', '--cols', type=int, help="Number of squares per column", default=16)
-
-        parser.add_argument('-r', '--rows', type=int, help="Number of squares per row", default=9)
-        parser.add_argument('displays', metavar='N', nargs='+')
-
-        args = parser.parse_args()
-
-        if args.verbose: loglevel = logging.DEBUG
-        elif args.quiet: loglevel = logging.ERROR
-        else:            loglevel = logging.INFO
-
-        logging.basicConfig(level=loglevel, format='%(asctime)s %(levelname)s %(message)s')
-
-        return args
-
-
 
 class WorkerThread(Thread):
-    def __init__(self, gui, views, screens, args, cond):
+    def __init__(self, gui, views, screens, cond):
         Thread.__init__(self)
         self.gui = gui
         self.views = views
         self.screens = screens
         self._want_abort = 0
-        self.args = args
+        self.args = args # from global
         self.cond = cond
         self.defaultcamera = AndroidIPCamera(IMAGE_CAPTURE_URL)
 
@@ -345,8 +51,6 @@ class WorkerThread(Thread):
 
 
     def run(self):
-        cols = 40
-        rows = 24
         try:
             # Take a photo of each screen from each view, then process them
             for vname, view in iter(sorted(self.views.iteritems())):
@@ -378,7 +82,7 @@ class WorkerThread(Thread):
 
 
                 for sname in self.screens:
-                    w = self.screens[sname]
+                    screen = self.screens[sname]
 
                     if sname not in self.args.displays:
                         logger.info("Skipping display %s", sname)
@@ -399,15 +103,7 @@ class WorkerThread(Thread):
                     logger.info("Processing view %s, display %s", vname, sname)
                     self.wait()
 
-                    mask, coords = self.doMaskAndCalibration(vname, sname, w['width'], w['height'], cols, rows)
-                    if True or coords is None:
-                        logger.warn("Failed to find coordinates for screen %s in view %s, trying to calibrate parts of the screen", sname, vname)
-                        self.doPartialCalibration(vname, sname, w['width'], w['height'], mask)
-
-                    if False: # this is an attempt to detect corners, it is currently much less reliable than findChessboard
-                        points = self.findCorners(img1m)
-                        img = draw_points(points, img1m.shape[1], img1m.shape[0], 0, 0)
-                        self.putImage(img, 'img1-points')
+                    self.calibrate(screen)
 
 
                     logger.debug("Finished screen %s", sname)
@@ -426,8 +122,22 @@ class WorkerThread(Thread):
             exit()
 
 
+    def calibrate(self, screen):
+        cols = 40
+        rows = 24
 
-    def doMaskAndCalibration(self, vname, sname, width, height, cols, rows, mask=None,x=0, y=0, square_width=None, square_height=None):
+        mask, coords = self.doMaskAndCalibration(vname, sname, screen['width'], screen['height'], cols, rows)
+        if True or coords is None:
+            logger.warn("Failed to find coordinates for screen %s in view %s, trying to calibrate parts of the screen", sname, vname)
+            self.doPartialCalibration(vname, sname, screen['width'], screen['height'], mask)
+
+        if False: # this is an attempt to detect corners, it is currently much less reliable than findChessboard
+            points = self.findCorners(img1m)
+            img = draw_points(points, img1m.shape[1], img1m.shape[0], 0, 0)
+            self.putImage(img, 'img1-points')
+
+
+    def doMaskAndCalibration(self, vname, sname, width, height, cols, rows, mask=None, x=0, y=0, square_width=None, square_height=None):
         # There is one less inside corner in each row and column than the number of squares we display
         cnrx = cols - 1
         cnry = rows - 1
@@ -437,13 +147,14 @@ class WorkerThread(Thread):
         img1, img2 = self.acquireCheckboards(vname, sname, width, height, cols, rows, x, y, square_width, square_height)
 
         if mask is None:
+            logger.info("Creating mask")
             # Subtract positive and negative chessboard to obtain mask
             mask = self.getMask(img1, img2)
 
             # Warn if mask reaches edge -- full grid is probably not shown
             self.isMaskOnEdge(mask)
 
-        logger.debug("Apply mask")
+        logger.debug("Applying mask")
         # get masked, thresholded chessboards
         img1m = self.applyMask(img1, mask)
         self.putImage(img1m, '{0}x{1}-diff1-masked'.format(cols, rows))
@@ -667,9 +378,11 @@ class WorkerThread(Thread):
 
     def applyMask(self, img, mask):
         # Mask out everything other than the chessboard area
-        imgm = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        ret, imgm = cv2.threshold(imgm, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
-        return cv2.add(imgm, mask)
+        imgbw = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        ret, imgbw = cv2.threshold(imgbw, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+        logger.debug(imgbw)
+        logger.debug(mask)
+        return cv2.add(imgbw, mask)
 
 
     def getMask(self, img1, img2):
@@ -777,8 +490,8 @@ class WorkerThread(Thread):
         img = img_string_to_cv(self.camera.acquireImage(imgname, focus))
         if img is None:
             raise ImageCaptureError("Failed to read image %s", imgname)
-        if width is not None and height is not None:
-            img = img_cv_resize(img, width, height, 'outer')
+        #if width is not None and height is not None:
+        #    img = img_cv_resize(img, width, height, 'outer')
         return img
 
 
@@ -837,131 +550,35 @@ class WorkerThread(Thread):
         wx.PostEvent(self.gui, CommandEvent(res))
 
 
-    def drawChessboard(self, screen_width, screen_height, cols, rows, color1='#fff', color2='#000', x=0, y=0, square_width=None, square_height=None, bgcolor='#000'):
-        if square_width is None: square_width = (screen_width-x) / cols
-        if square_height is None: square_height = (screen_height-y) / rows
-        logger.debug("drawChessboard %s x %s", cols, rows)
-        image = wand.image.Image(width=screen_width, height=screen_height, background=wand.color.Color(bgcolor))
-        with wand.drawing.Drawing() as draw:
-            draw.fill_color = wand.color.Color(color2)
-            draw.color = wand.color.Color(color2)
-            for r in range(rows):
-                for c in range(cols):
-                    if (c + r) % 2:
-                        draw.fill_color = wand.color.Color(color2)
-                        draw.color = wand.color.Color(color2)
-                    else:
-                        draw.fill_color = wand.color.Color(color1)
-                        draw.color = wand.color.Color(color1)
-                    x2 = x + square_width * c
-                    y2 = y + square_height * r
+def parseCmdline():
+    parser = argparse.ArgumentParser(description='''
+        TODO: insert description.'''
+    )
+    parser.add_argument('-v', '--verbose', action='store_true', help="Enable verbose output")
+    parser.add_argument('-q', '--quiet', action='store_true', help="Output errors only")
 
-                    #logger.debug("%s %s %s %s", x, y, square_width, square_height)
-                    draw.rectangle(x2, y2, width=square_width-1, height=square_height-1)
+    parser.add_argument('-a', '--autorun', action='store_true', help="Do not stop after each step")
+    parser.add_argument('-C', '--usecache', action='store_true', help="Use images from cache")
 
-            draw.draw(image)
-            blob = image.make_blob('png')
-        return cStringIO.StringIO(blob)
+    parser.add_argument('-W', '--width', type=int, help="Target screen width. This will be the width of the output image.", default=1920)
+    parser.add_argument('-H', '--height', type=int, help="Target screen height. This will be the height of the output image.", default=1080)
+    parser.add_argument('-c', '--cols', type=int, help="Number of squares per column", default=16)
 
+    parser.add_argument('-r', '--rows', type=int, help="Number of squares per row", default=9)
+    parser.add_argument('displays', metavar='N', nargs='+')
 
-def draw_points(points, width, height, xoff, yoff):
-    image = wand.image.Image(width=width, height=height, background=wand.color.Color('#fff'))
+    args = parser.parse_args()
 
-    with wand.drawing.Drawing() as draw:
-        draw.fill_color = wand.color.Color('#f00')
-        for p in range(len(points)):
-            # draw.fill_color = wand.color.Color('#{0:x}{0:x}{0:x}'.format(r*2))
-            x = points[p][0] + xoff
-            y = points[p][1] + yoff
-            draw_point(draw, x, y)
+    if args.verbose: loglevel = logging.DEBUG
+    elif args.quiet: loglevel = logging.ERROR
+    else:            loglevel = logging.INFO
 
-        draw.draw(image)
-        blob = image.make_blob('png')
-    return cStringIO.StringIO(blob)
-    return cStringIO.StringIO(blob)
+    logging.basicConfig(level=loglevel, format='%(asctime)s %(levelname)s %(message)s')
 
-
-def draw_grid(grid, width, height, xoff, yoff):
-    image = wand.image.Image(width=width, height=height, background=wand.color.Color('#fff'))
-
-    with wand.drawing.Drawing() as draw:
-        draw.fill_color = wand.color.Color('#f00')
-        for r in range(len(grid)):
-            # draw.fill_color = wand.color.Color('#{0:x}{0:x}{0:x}'.format(r*2))
-            for c in range(len(grid[r])):
-                #logger.info("r: %s, c: %s", r, c)
-                x = grid[r][c][0] + xoff
-                y = grid[r][c][1] + yoff
-                draw_point(draw, x, y)
-
-        draw.draw(image)
-        blob = image.make_blob('png')
-    return cStringIO.StringIO(blob)
-
-
-def draw_point(draw, x, y):
-    draw.point(x, y)
-    draw.point(x+1, y)
-    draw.point(x-1, y)
-    draw.point(x, y+1)
-    draw.point(x, y-1)
-
-
-def draw_text(text, width, height):
-    font_size = 400
-    image = wand.image.Image(width=width, height=height, background=wand.color.Color('#fff'))
-    with wand.drawing.Drawing() as draw:
-        draw.fill_color = wand.color.Color('#000')
-        draw.font_size = font_size
-        draw.text_alignment = 'center'
-        draw.text(width/2, height/2+font_size/2, text)
-
-        draw.draw(image)
-        blob = image.make_blob('png')
-    return cStringIO.StringIO(blob)
-
-
-def img_string_to_cv(string):
-    nparr = np.fromstring(string, np.uint8)
-    return cv2.imdecode(nparr, cv2.CV_LOAD_IMAGE_COLOR)
-
-
-def img_cv_to_stringio(img):
-    nparr = cv2.imencode('.png', img)[1]
-    return cStringIO.StringIO(nparr.tostring())
-
-
-def img_cv_resize(img, width, height, style='exact'):
-    h, w, channels = img.shape
-    scale_h = float(height) / h
-    scale_w = float(width) / w
-    if style == 'inner':
-        scale_h = scale_h if scale_h < scale_w else scale_w
-        scale_w = scale_h
-    elif style == 'outer':
-        scale_h = scale_h if scale_h > scale_w else scale_w
-        scale_w = scale_h
-
-    return cv2.resize(img, None, fx=scale_w, fy=scale_h, interpolation=cv2.INTER_CUBIC)
-
-
-def factors(n):
-    factors = set()
-    for i in range(1, n//2 + 1):
-        if n % i == 0: factors.add(i)
-    return factors
-
-
-def mkdir_p(path):
-    try:
-        os.makedirs(path)
-    except OSError as exc:  # Python >2.5
-        if exc.errno == errno.EEXIST and os.path.isdir(path):
-            pass
-        else:
-            raise
-
+    return args
 
 if __name__ == '__main__':
+    __builtin__.args = parseCmdline()
+
     app = MainApp(0)
     app.MainLoop()
