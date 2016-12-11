@@ -14,10 +14,10 @@ import traceback
 import numpy as np
 from threading import *
 import screenwarp.gui
-from screenwarp.camera import *
-from screenwarp.gui import *
+import screenwarp.camera
 from screenwarp.draw import *
 from screenwarp.util import *
+#from screenwarp.vision import *
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ class WorkerThread(Thread):
         self._want_abort = 0
         self.args = args # from global
         self.cond = cond
-        self.defaultcamera = AndroidIPCamera(IMAGE_CAPTURE_URL)
+        self.defaultcamera = screenwarp.camera.AndroidIPCamera(IMAGE_CAPTURE_URL)
 
         seq = 0
         while os.path.isdir('out' + str(seq)):
@@ -63,13 +63,15 @@ class WorkerThread(Thread):
                     screenid = draw_text(sname, w['width'], w['height'])
                     self.sendCommand('displayImage', window=sname, image=screenid)
                 self.wait(force_wait=True)
+                if args.delay:
+                    time.sleep(args.delay)
 
                 # Configure camera
                 if self.args.usecache:
-                    self.camera = FileCacheCamera()
+                    self.camera = screenwarp.camera.FileCacheCamera()
                 else:
                     if 'camera' in view:
-                        camera = view['camera']['type']
+                        camera = 'screenwarp.camera.' + view['camera']['type']
                         cameraparams = view['camera']['params']
                         logger.info("Using camera %s for view %s", camera, vname)
                         logger.debug(cameraparams)
@@ -77,6 +79,7 @@ class WorkerThread(Thread):
                     else:
                         sef.camera = self.defaultcamera
 
+                # calibrate camera focus and exposure
                 self.acquireImage(vname, 1280, 960, focus=True)
                 # Black out all screens
                 for sname in self.screens:
@@ -85,7 +88,7 @@ class WorkerThread(Thread):
 
 
                 for sname in self.screens:
-                    w = self.screens[sname]
+                    screen = self.screens[sname]
 
                     if sname not in self.args.displays:
                         logger.info("Skipping display %s", sname)
@@ -106,23 +109,10 @@ class WorkerThread(Thread):
                     logger.info("Processing view %s, display %s", vname, sname)
                     self.wait()
 
-                    mask, coords = self.doMaskAndCalibration(vname, sname, w['width'], w['height'], cols, rows)
-                    if True or coords is None:
-                        logger.warn("Failed to find coordinates for screen %s in view %s, trying to calibrate parts of the screen", sname, vname)
-                        self.doPartialCalibration(vname, sname, w['width'], w['height'], mask)
-
-                    if False: # this is an attempt to detect corners, it is currently much less reliable than findChessboard
-                        points = self.findCorners(img1m)
-                        img = draw_points(points, img1m.shape[1], img1m.shape[0], 0, 0)
-                        self.putImage(img, 'img1-points')
-
+                    self.calibrate(vname, sname, screen)
 
                     logger.debug("Finished screen %s", sname)
                     self.sendCommand('displayColor', window=sname, color='#000')
-
-                    #img = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,11,2)
-                    #img = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY,11,2)
-                    #img3 = cv2.fastNlMeansDenoising(img3,None,40,17,31)
 
 
         except Exception as e:
@@ -132,6 +122,74 @@ class WorkerThread(Thread):
             self.sendCommand('exit')
             exit()
 
+
+    def calibrate(self, vname, sname, screen):
+        cols = 5
+        rows = 3
+
+        mask, coords = self.doMaskAndCalibration(vname, sname, screen['width'], screen['height'], cols*8, rows*8)
+
+        for i in (1, 2, 4, 8, 16, 32):
+            self.findStripes(vname, sname, screen['width'], screen['height'], cols*i, 1, mask)
+            self.findStripes(vname, sname, screen['width'], screen['height'], 1, rows*i, mask)
+        return
+
+        if True or coords is None:
+            logger.warn("Failed to find coordinates for screen %s in view %s, trying to calibrate parts of the screen", sname, vname)
+            self.doPartialCalibration(vname, sname, screen['width'], screen['height'], mask)
+
+        if False: # this is an attempt to detect corners, it is currently much less reliable than findChessboard
+            points = self.findCorners(img1m)
+            img = draw_points(points, img1m.shape[1], img1m.shape[0], 0, 0)
+            self.putImage(img, 'img1-points')
+
+
+    def findStripes(self, vname, sname, width, height, cols, rows, mask=None):
+
+        img1, img2 = self.acquireCheckboards(vname, sname, width, height, cols, rows)
+
+        imgdiff1 = cv2.subtract(img1, img2)
+        self.putImage(imgdiff1, 'imgdiff1')
+        imgdiff2 = cv2.subtract(img2, img1)
+        self.putImage(imgdiff2, 'imgdiff2')
+
+        img1m = self.applyMask(imgdiff1, mask)
+        img2m = self.applyMask(imgdiff2, mask)
+
+        img = img1m # cv2.cvtColor(img1m, cv2.COLOR_BGR2GRAY)
+        #img = cv2.medianBlur(img, 13)
+        ret, img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+
+        kernel = np.ones((5,5),np.uint8)
+        #imgc = cv2.morphologyEx(imgb, cv2.MORPH_OPEN, kernel)
+        tmp = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel)
+        imgc = cv2.morphologyEx(tmp, cv2.MORPH_CLOSE, kernel)
+
+        self.putImage(imgc, 'stripes')
+        border = 10
+        imgb = cv2.copyMakeBorder(imgc, top=border, bottom=border, left=border, right=border, borderType=cv2.BORDER_CONSTANT, value=[0, 0, 0] )
+
+        (cnts, x) = cv2.findContours(imgc, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        limit = rows * cols * 2
+        logger.info("Found %s contours in mask image, filtering to %s", len(cnts), limit)
+        #cnts = sorted(cnts, key = cv2.contourArea, reverse = True)[:limit]
+        image = np.zeros(imgb.shape, np.uint8)
+
+        h, w = image.shape[:2]
+        filtered = []
+        approximated = []
+
+        for c in cnts:
+            p = []
+            #logger.debug(c)
+            area = cv2.contourArea(c)
+            #logger.debug(area)
+            if area < 200:
+                continue
+            filtered.append(c)
+
+        cv2.drawContours(image, filtered, -1, (255,0,0), 2)
+        self.putImage(image, 'stripes2')
 
 
     def doMaskAndCalibration(self, vname, sname, width, height, cols, rows, mask=None, x=0, y=0, square_width=None, square_height=None):
@@ -278,74 +336,6 @@ class WorkerThread(Thread):
                 # obstruction on screen?
                 # reduce from edge
 
-            # Try stripes, count number of polygons and check if they hit the edge
-
-
-
-    def doFineCalibration(self, vname, sname, width, height, mask):
-        commonfactors = sorted(factors(width).intersection(factors(height)), reverse=True)
-        limit = 8
-
-        for i in commonfactors:
-            if 'left' in edges and 'right' in edges:
-                w = width / 2
-                x = width / 4
-            elif 'left' in edges:
-                w = width / 2
-                x = width / 2
-            elif 'right' in edges:
-                w = width / 2
-                x = 0
-            else:
-                w = width
-                x = 0
-
-            if 'top' in edges and 'bottom' in edges:
-                h = height / 2
-                y = height / 4
-            elif 'top' in edges:
-                h = height / 2
-                y = height / 2
-            elif 'bottom' in edges:
-                h = height / 2
-                y = 0
-            else:
-                h = height
-                y = 0
-
-            cols = w/i
-            rows = h/i
-            if cols < 4 or rows < 4:
-                logger.debug("Not enough rows or columns (%s x %s), skipping", cols, rows)
-                continue
-            if w / cols < limit or h / rows < limit:
-                logger.debug("Row or column size limit reached, skipping")
-                continue
-
-            while True:
-                logger.info("Creating %s x %s checkerboard of %s x %s squares on screen %s with offset (%s, %s) and size (%s, %s)",
-                    cols, rows, i, i, sname, x, y, w, h)
-                mask, coords = self.doMaskAndCalibration(vname, sname, width, height, cols, rows, mask, x=x, y=y, square_width=i, square_height=i)
-                if coords is not None:
-                    # try larger
-                    logger.debug("coords found")
-                    pass
-                else:
-                    logger.debug("coords not found")
-                    # if new mask meets the edge:
-                        # grid off-edge?
-                        # reduce from centre
-                    # else:
-                        # obstruction on screen?
-                        # reduce from edge
-
-                    # Try stripes, count number of polygons and check if they hit the edge
-                    pass
-                break
-
-
-
-
 
     def acquireCheckboards(self, view, screen, width, height, cols, rows, x=0, y=0, square_width=None, square_height=None):
         # Display chessboard image then take a photo
@@ -375,11 +365,12 @@ class WorkerThread(Thread):
 
     def applyMask(self, img, mask):
         # Mask out everything other than the chessboard area
-        imgbw = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        ret, imgbw = cv2.threshold(imgbw, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
-        logger.debug(imgbw)
-        logger.debug(mask)
-        return cv2.add(imgbw, mask)
+        img_bw = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        if img_bw.shape != mask.shape:
+            mask = img_cv_resize(mask, img_bw.shape[1], img_bw.shape[0])
+        ret, img_bw = cv2.threshold(img_bw, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+
+        return cv2.add(img_bw, mask)
 
 
     def getMask(self, img1, img2):
@@ -487,8 +478,8 @@ class WorkerThread(Thread):
         img = img_string_to_cv(self.camera.acquireImage(imgname, focus))
         if img is None:
             raise ImageCaptureError("Failed to read image %s", imgname)
-        #if width is not None and height is not None:
-        #    img = img_cv_resize(img, width, height, 'outer')
+        if width is not None and height is not None:
+            img = img_cv_resize(img, width, height, 'outer')
         return img
 
 
@@ -507,7 +498,8 @@ class WorkerThread(Thread):
             seq += 1
 
         logger.debug("Image %s is a %s", path, type(img).__name__)
-
+        width = self.screens[screen]['width']
+        height = self.screens[screen]['height']
         if isinstance(img, str):
             logger.debug('string')
             with open(path, 'wb') as f: f.write(img)
@@ -515,7 +507,8 @@ class WorkerThread(Thread):
         elif isinstance(img, np.ndarray):
             logger.debug("ndarray")
             cv2.imwrite(path, img)
-            self.sendCommand('displayImage', window=screen, image=img_cv_to_stringio(img))
+            imgr = img_cv_resize(img, width, height, 'inner')
+            self.sendCommand('displayImage', window=screen, image=img_cv_to_stringio(imgr))
         elif type(img).__name__ == 'StringI':
             with open(path, 'wb') as f: f.write(img.getvalue())
             self.sendCommand('displayImage', window=screen, image=img)
