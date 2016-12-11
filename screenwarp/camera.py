@@ -1,3 +1,4 @@
+import time
 import logging
 import requests
 import subprocess
@@ -11,18 +12,17 @@ class AndroidIPCamera:
     def acquireImage(self, imgname, focus=False):
         logger.debug("Using camera at %s", self.url)
         if focus:
-            # focus to infinity, lock focus and exposure
-            requests.get(self.url + '/settings/focusmode?set=auto')
-            requests.get(self.url + '/settings/focus?set=on')
-            requests.get(self.url + '/settings/exposure_lock?set=on')
-            requests.get(self.url + '/settings/whitebalance_lock?set=on')
-            res = requests.get(self.url + '/photo.jpg')
-            requests.get(self.url + '/settings/focus?set=on')
-            requests.get(self.url + '/settings/focus?set=off')
+            # take focused photo, lock focus and exposure
+            requests.get(self.url + '/settings/focusmode?set=auto', timeout=2)
+            requests.get(self.url + '/settings/focus?set=on', timeout=2)
+            requests.get(self.url + '/settings/exposure_lock?set=on', timeout=2)
+            requests.get(self.url + '/settings/whitebalance_lock?set=on', timeout=2)
+            res = requests.get(self.url + '/photo.jpg', timeout=2)
+            requests.get(self.url + '/settings/focus?set=off', timeout=2)
 
         else:
-            time.sleep(1) # Allow display to update
-            res = requests.get(self.url + '/photo.jpg')
+            time.sleep(0.5) # Allow display to update
+            res = requests.get(self.url + '/photo.jpg', timeout=2)
 
         logger.debug(res)
         if not res:

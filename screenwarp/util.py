@@ -18,7 +18,12 @@ def img_cv_to_stringio(img):
 
 
 def img_cv_resize(img, width, height, style='exact'):
-    h, w, channels = img.shape
+    logger.debug(img.shape)
+    if len(img.shape) == 3:
+        h, w, channels = img.shape
+    else:
+        h, w = img.shape
+
     scale_h = float(height) / h
     scale_w = float(width) / w
     if style == 'inner':
@@ -46,3 +51,7 @@ def mkdir_p(path):
             pass
         else:
             raise
+
+def random_color():
+    levels = range(32,256,32)
+    return tuple(random.choice(levels) for _ in range(3))
