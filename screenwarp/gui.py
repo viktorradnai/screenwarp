@@ -6,10 +6,24 @@ import errno
 import logging
 import cStringIO
 from threading import *
-from screenwarp.threads import WorkerThread
+from screenwarp.worker import WorkerThread
 
 logger = logging.getLogger(__name__)
 
+GUI = None
+
+def sendCommand(action, **kwargs):
+    logger.debug("Sending command %s", action)
+    if GUI is None:
+        logger.warn("GUI object not set, cannot send command")
+        return
+    res = kwargs
+    res['action'] = action
+    wx.PostEvent(GUI, CommandEvent(res))
+
+# TODO: This should be made into a singleton
+def get():
+    return GUI
 
 # Define notification event for thread completion
 EVT_COMMAND_ID = wx.NewId()
@@ -72,9 +86,11 @@ class MainApp(wx.App):
     frames = {}  # ScreenFrame objects
 
     def OnInit(self):
+        global GUI
         viewdb = 'views.json'
         screendb = 'screens.json'
         self.cond = Condition()
+        GUI = self
 
         # Set up event handler for any worker thread results
         EVT_COMMAND(self, self.onCommand)
@@ -127,7 +143,7 @@ class MainApp(wx.App):
                 self.frames[sname] = frame
             self.screens.update(screens)
             window.Show()
-        self.worker = WorkerThread(self, self.views, self.screens, self.cond)
+        self.worker = WorkerThread(self.views, self.screens, self.cond)
         return True
 
 

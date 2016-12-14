@@ -13,17 +13,23 @@ import cv2
 import traceback
 import numpy as np
 from threading import *
-import screenwarp.gui
-import screenwarp.camera
-from screenwarp.draw import *
-from screenwarp.util import *
-#from screenwarp.vision import *
+import gui
+from camera import FileCacheCamera, AndroidIPCamera, CommandLineCamera
+import vision as sv
+from draw import *
+from util import *
 
 logger = logging.getLogger(__name__)
 
 IMAGE_CAPTURE_URL = 'http://192.168.0.237:8080'
 #IMAGE_CAPTURE_URL = 'http://192.168.43.194:8080'
 
+WORKER = None
+def putImage(*args, **kwargs):
+    return WORKER.putImage(*args, **kwargs)
+
+# Make it callable from any module
+__builtin__.putImage = putImage
 
 class ImageCaptureError(Exception):
     pass
@@ -31,17 +37,17 @@ class ImageCaptureError(Exception):
 class NotFoundError(Exception):
     pass
 
-
 class WorkerThread(Thread):
-    def __init__(self, gui, views, screens, cond):
+    def __init__(self, views, screens, cond):
+        global WORKER
         Thread.__init__(self)
-        self.gui = gui
+        WORKER = self
         self.views = views
         self.screens = screens
         self._want_abort = 0
         self.args = args # from global
         self.cond = cond
-        self.defaultcamera = screenwarp.camera.AndroidIPCamera(IMAGE_CAPTURE_URL)
+        self.defaultcamera = AndroidIPCamera(IMAGE_CAPTURE_URL)
 
         seq = 0
         while os.path.isdir('out' + str(seq)):
@@ -61,17 +67,17 @@ class WorkerThread(Thread):
                 for sname in self.screens:
                     w = self.screens[sname]
                     screenid = draw_text(sname, w['width'], w['height'])
-                    self.sendCommand('displayImage', window=sname, image=screenid)
+                    gui.sendCommand('displayImage', window=sname, image=screenid)
                 self.wait(force_wait=True)
                 if args.delay:
                     time.sleep(args.delay)
 
                 # Configure camera
                 if self.args.usecache:
-                    self.camera = screenwarp.camera.FileCacheCamera()
+                    self.camera = FileCacheCamera()
                 else:
                     if 'camera' in view:
-                        camera = 'screenwarp.camera.' + view['camera']['type']
+                        camera = view['camera']['type']
                         cameraparams = view['camera']['params']
                         logger.info("Using camera %s for view %s", camera, vname)
                         logger.debug(cameraparams)
@@ -84,7 +90,7 @@ class WorkerThread(Thread):
                 # Black out all screens
                 for sname in self.screens:
                     w = self.screens[sname]
-                    self.sendCommand('displayColor', window=sname, color='#000')
+                    gui.sendCommand('displayColor', window=sname, color='#000')
 
 
                 for sname in self.screens:
@@ -112,14 +118,14 @@ class WorkerThread(Thread):
                     self.calibrate(vname, sname, screen)
 
                     logger.debug("Finished screen %s", sname)
-                    self.sendCommand('displayColor', window=sname, color='#000')
+                    gui.sendCommand('displayColor', window=sname, color='#000')
 
 
         except Exception as e:
             logger.error("Caught exception, exiting")
             logger.error(traceback.format_exc())
         finally:
-            self.sendCommand('exit')
+            gui.sendCommand('exit')
             exit()
 
 
@@ -153,8 +159,8 @@ class WorkerThread(Thread):
         imgdiff2 = cv2.subtract(img2, img1)
         self.putImage(imgdiff2, 'imgdiff2')
 
-        img1m = self.applyMask(imgdiff1, mask)
-        img2m = self.applyMask(imgdiff2, mask)
+        img1m = sv.applyMask(imgdiff1, mask)
+        img2m = sv.applyMask(imgdiff2, mask)
 
         img = img1m # cv2.cvtColor(img1m, cv2.COLOR_BGR2GRAY)
         #img = cv2.medianBlur(img, 13)
@@ -204,16 +210,16 @@ class WorkerThread(Thread):
         if mask is None:
             logger.info("Creating mask")
             # Subtract positive and negative chessboard to obtain mask
-            mask = self.getMask(img1, img2)
+            mask = sv.createMask(img1, img2)
 
             # Warn if mask reaches edge -- full grid is probably not shown
-            self.isMaskOnEdge(mask)
+            sv.isMaskOnEdge(mask)
 
         logger.debug("Applying mask")
         # get masked, thresholded chessboards
-        img1m = self.applyMask(img1, mask)
+        img1m = sv.applyMask(img1, mask)
         self.putImage(img1m, '{0}x{1}-diff1-masked'.format(cols, rows))
-        img2m = self.applyMask(img2, mask)
+        img2m = sv.applyMask(img2, mask)
         self.putImage(img2m, '{0}x{1}-diff2-masked'.format(cols, rows))
 
         logger.debug("Find chessboard")
@@ -233,7 +239,7 @@ class WorkerThread(Thread):
 
 
     def doPartialCalibration(self, vname, sname, width, height, mask):
-        x, edges = self.isMaskOnEdge(mask)
+        x, edges = sv.isMaskOnEdge(mask)
 
         if 'left' in edges and 'right' in edges:
             w = width / 2
@@ -262,7 +268,7 @@ class WorkerThread(Thread):
             y = 0
 
         result = self.calibrateVisibleArea(vname, sname, width, height, mask, w, h, x, y, w/2)
-        x__, y__ = self.gui.GetScreenPosition(sname)
+        x__, y__ = gui.get().GetScreenPosition(sname)
         x_, y_, w_, h_ = result
         logger.info("Results: w: %s, x: %s, actual: %s, diff: %s", w_, x_, abs(x__), x_ + x__)
 
@@ -363,71 +369,6 @@ class WorkerThread(Thread):
         return img1, img2
 
 
-    def applyMask(self, img, mask):
-        # Mask out everything other than the chessboard area
-        img_bw = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        if img_bw.shape != mask.shape:
-            mask = img_cv_resize(mask, img_bw.shape[1], img_bw.shape[0])
-        ret, img_bw = cv2.threshold(img_bw, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
-
-        return cv2.add(img_bw, mask)
-
-
-    def getMask(self, img1, img2):
-        # Subtract two images showing inverted pattern. This blacks out non-display areas that only have diffuse light.
-        imgdiff1 = cv2.subtract(img1, img2)
-        self.putImage(imgdiff1, 'imgdiff1')
-        imgdiff2 = cv2.subtract(img2, img1)
-        self.putImage(imgdiff2, 'imgdiff2')
-
-        # Add two diff images together to fill visible area, then threshold it to create mask
-        imgdiff = cv2.add(imgdiff1, imgdiff2)
-        self.putImage(imgdiff, 'imgdiff')
-        img = cv2.cvtColor(imgdiff, cv2.COLOR_BGR2GRAY)
-        img = cv2.medianBlur(img, 13)
-        ret, mask = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
-        self.putImage(mask, 'mask')
-
-        # Detect closed contours in the image, then pick the second largest which should be the projector's main visible area
-        # The largest contour is a border around the entire picture
-        border = 10
-        maskb = cv2.copyMakeBorder(mask, top=border, bottom=border, left=border, right=border, borderType=cv2.BORDER_CONSTANT, value=[255, 255, 255] )
-
-        (cnts, x) = cv2.findContours(maskb, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        logger.info("Found %s contours in mask image", len(cnts))
-        cnts = sorted(cnts, key = cv2.contourArea, reverse = True)[1:2]
-        #cv2.drawContours(mask2, cnts, -1, (255,0,0), 2)
-
-        mask2 = np.full(maskb.shape, 255, np.uint8)
-        cv2.fillPoly(mask2, pts=cnts, color=(0,0,0))
-        mask2 = mask2[border:-border, border:-border]
-        self.putImage(mask2, 'mask2')
-
-        return mask2
-
-
-    def isMaskOnEdge(self, mask):
-        edges = []
-        if 0 in mask[0]:
-            edge = 'top'
-            logger.warn("View %s screen %s mask reaches %s edge", self.currView, self.currScreen, edge)
-            edges.append(edge)
-        if 0 in mask[-1]:
-            edge = 'bottom'
-            logger.warn("View %s screen %s mask reaches %s edge", self.currView, self.currScreen, edge)
-            edges.append(edge)
-        if 0 in mask[:, [0]]:
-            edge = 'left'
-            logger.warn("View %s screen %s mask reaches %s edge", self.currView, self.currScreen, edge)
-            edges.append(edge)
-        if 0 in mask[:, [-1]]:
-            edge = 'right'
-            logger.warn("View %s screen %s mask reaches %s edge", self.currView, self.currScreen, edge)
-            edges.append(edge)
-
-        return bool(len(edges)), edges
-
-
     def findCorners(self, img):
         blocksize = 2
         sobel = 3
@@ -503,15 +444,15 @@ class WorkerThread(Thread):
         if isinstance(img, str):
             logger.debug('string')
             with open(path, 'wb') as f: f.write(img)
-            self.sendCommand('displayImage', window=screen, image=cStringIO.StringIO(img))
+            gui.sendCommand('displayImage', window=screen, image=cStringIO.StringIO(img))
         elif isinstance(img, np.ndarray):
             logger.debug("ndarray")
             cv2.imwrite(path, img)
             imgr = img_cv_resize(img, width, height, 'inner')
-            self.sendCommand('displayImage', window=screen, image=img_cv_to_stringio(imgr))
+            gui.sendCommand('displayImage', window=screen, image=img_cv_to_stringio(imgr))
         elif type(img).__name__ == 'StringI':
             with open(path, 'wb') as f: f.write(img.getvalue())
-            self.sendCommand('displayImage', window=screen, image=img)
+            gui.sendCommand('displayImage', window=screen, image=img)
         self.wait(wait)
 
 
@@ -532,10 +473,4 @@ class WorkerThread(Thread):
         with self.cond:
             self.cond.notify()
 
-
-    def sendCommand(self, action, **kwargs):
-        logger.debug("Sending command %s", action)
-        res = kwargs
-        res['action'] = action
-        wx.PostEvent(self.gui, screenwarp.gui.CommandEvent(res))
 
