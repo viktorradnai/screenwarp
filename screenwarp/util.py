@@ -18,7 +18,7 @@ def img_cv_to_stringio(img):
 
 
 def img_cv_resize(img, width, height, style='exact'):
-    logger.debug(img.shape)
+    # logger.debug(img.shape)
     if len(img.shape) == 3:
         h, w, channels = img.shape
     else:
