@@ -5,8 +5,7 @@ import math
 from math import sqrt, degrees, radians, sin, asin, cos, tan, atan
 import numpy as np
 
-A = radians(32) # Vertical sweep / 2
-B = radians(90) # Horizontal sweep
+BOT_CENT_HEIGHT = 0.5   #labeled 'a' in the diagram
 
 # calculates the x of the pixel created by projecting a cylinder-screen-pixel onto a flat screen
 """
@@ -17,18 +16,19 @@ D = ---------------------------------
         \     \ sqrt(2) * cos(A)  //
 """
 def xcoord(x):
-    D = sqrt(2) * cos(A) / cos( atan ( tan(A) - 0.1177*x /(sqrt(2) * cos(A)) ) )
-    t = tan(B * x)
-    return D * t / (1 + t) / (sqrt(2)*cos(A))
-
+    x = x * math.pi   # convert x to meters
+    theta = radians(90 * x / math.pi)
+    xx = 2 * sqrt( 2*(1 + 1/(1+2*cos(theta)*sin(theta)) - 2/(1+tan(theta)) ) )
+    return xx / 4   # convert meters to [0-1]
+    
 def ycoord(x, y):
-    theta = atan(tan(2 * A)*(1 - y)) - A
-    phi = B * x
-    F = 2 / (cos(phi) + sin(phi))
-    h = sqrt(2) * sin(A)
-    D = F * cos(asin(h / F))
-    return (h - D * tan(theta)) / (2 * h)
-
+    # convert x and y to meters
+    x = x * math.pi
+    y = y * 2.4 
+    theta = radians(90 * x / math.pi)
+    D = 2 * sqrt(2) / (cos(theta) + sin(theta))
+    yy = 0.5 * ( D*y - (D - 2)*(2.4 + BOT_CENT_HEIGHT) ) 
+    return yy / 2.4 # convert meters to [0-1]
 
 def main():
     xstep = 0.02
