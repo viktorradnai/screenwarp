@@ -21,8 +21,8 @@ from util import *
 
 logger = logging.getLogger(__name__)
 
-IMAGE_CAPTURE_URL = 'http://192.168.0.237:8080'
-#IMAGE_CAPTURE_URL = 'http://192.168.43.194:8080'
+#IMAGE_CAPTURE_URL = 'http://192.168.0.237:8080'
+IMAGE_CAPTURE_URL = 'http://192.168.43.194:8080'
 
 WORKER = None
 def putImage(*args, **kwargs):
@@ -34,8 +34,6 @@ __builtin__.putImage = putImage
 class ImageCaptureError(Exception):
     pass
 
-class NotFoundError(Exception):
-    pass
 
 class WorkerThread(Thread):
     def __init__(self, views, screens, cond):
@@ -83,7 +81,7 @@ class WorkerThread(Thread):
                         logger.debug(cameraparams)
                         self.camera = getattr(sys.modules[__name__], camera)(**cameraparams)
                     else:
-                        sef.camera = self.defaultcamera
+                        self.camera = self.defaultcamera
 
                 # calibrate camera focus and exposure
                 self.acquireImage(vname, 1280, 960, focus=True)
@@ -115,7 +113,7 @@ class WorkerThread(Thread):
                     logger.info("Processing view %s, display %s", vname, sname)
                     self.wait()
 
-                    self.calibrate(vname, sname, screen)
+                    self.calibrate(vname, sname, view, screen)
 
                     logger.debug("Finished screen %s", sname)
                     gui.sendCommand('displayColor', window=sname, color='#000')
@@ -129,18 +127,83 @@ class WorkerThread(Thread):
             exit()
 
 
-    def calibrate(self, vname, sname, screen):
-        cols = 5
-        rows = 3
+    def calibrate(self, vname, sname, view, screen):
 
-        mask, coords = self.doMaskAndCalibration(vname, sname, screen['width'], screen['height'], cols*8, rows*8)
+        width = screen['width']
+        height = screen['height']
+        screenview = sv.ScreenView(vname, sname, view, screen)
+        photos = screenview.getPhotoGroup()
+        commonfactors = sorted(factors(width).intersection(factors(height)), reverse=True)
+        gcf = commonfactors[0]
+        col_base = width / gcf
+        row_base = height / gcf
+        logger.debug("Greatest common divisor: %s, col_base: %s row_base: %s", gcf, col_base, row_base)
+
+        # do baseline capture to get mask
+        img1, img2 = self.acquireCheckboards(vname, sname, width, height, col_base*8, row_base*8)
+        mask, coords = self.doMaskAndCalibration(vname, sname, width, height, col_base*8, row_base*8, (img1, img2))
 
         for i in (1, 2, 4, 8, 16, 32):
-            self.findStripes(vname, sname, screen['width'], screen['height'], cols*i, 1, mask)
-            self.findStripes(vname, sname, screen['width'], screen['height'], 1, rows*i, mask)
+            cols = col_base * i
+            rows = row_base * i
+
+            # capture vertical bars
+            vs1, vs2 = self.acquireCheckboards(vname, sname, width, height, cols, 1)
+            photos.addPhotos(vs1, vs2, cols, 1)
+            # capture horizontal bars
+            hs1, hs2 = self.acquireCheckboards(vname, sname, width, height, 1, rows)
+            photos.addPhotos(hs1, hs2, 1, rows)
+            # capture chessboard
+            cb1, cb2 = self.acquireCheckboards(vname, sname, width, height, cols, rows)
+            photos.addPhotos(cb1, cb2, cols, rows)
+
+            # odd stripes
+            vbars1 = self.findStripes(vname, sname, width, height, cols*i, 1, (vs1, vs2), mask)
+            # even stripes
+            vbars2 = self.findStripes(vname, sname, width, height, cols*i, 1, (vs2, vs1), mask)
+
+            # odd stripes
+            hbars1 = self.findStripes(vname, sname, width, height, 1, rows*i, (hs1, hs2), mask)
+            # even stripes
+            hbars2 = self.findStripes(vname, sname, width, height, 1, rows*i, (hs2, hs1), mask)
+
+            if i == 1:
+                onedge, edges = sv.isMaskOnEdge(mask)
+                vsl = {}
+                vsl1 = vbars1.getSlices()
+                vsl2 = vbars2.getSlices()
+                for s in vsl1:
+                    key = s.getBoundingRect()[0]
+                    vsl[key] = s
+                for s in vsl2:
+                    key = s.getBoundingRect()[0]
+                    vsl[key] = s
+
+                #screenview.addSliceGroup(vbars, i+'-v')
+
+                logger.debug("vbars1 has %s slices", len(slices))
+                slices = vbars2.getSlices()
+                logger.debug("vbars2 has %s slices", len(slices))
+                slices = hbars1.getSlices()
+                logger.debug("hbars1 has %s slices", len(slices))
+                slices = hbars2.getSlices()
+                logger.debug("hbars2 has %s slices", len(slices))
+                break
+
+            for s in vbars1.getSlices():
+                if s.getParent() is not None:
+                    continue
+
+
+            intersect = cv2.add(vbars.getSlice(i).toMask(), hbars.getSlice(i).toMask())
+            self.putImage(vbars.getSlice(i).toMask(), 'intersecta')
+            self.putImage(hbars.getSlice(i).toMask(), 'intersectb')
+            self.putImage(intersect, 'intersectc')
+
+            screenview.addSliceGroup(hbars, i+'-h')
         return
 
-        if True or coords is None:
+        if False or coords is None:
             logger.warn("Failed to find coordinates for screen %s in view %s, trying to calibrate parts of the screen", sname, vname)
             self.doPartialCalibration(vname, sname, screen['width'], screen['height'], mask)
 
@@ -150,10 +213,8 @@ class WorkerThread(Thread):
             self.putImage(img, 'img1-points')
 
 
-    def findStripes(self, vname, sname, width, height, cols, rows, mask=None):
-
-        img1, img2 = self.acquireCheckboards(vname, sname, width, height, cols, rows)
-
+    def findStripes(self, vname, sname, width, height, cols, rows, images, mask=None):
+        img1, img2 = images
         imgdiff1 = cv2.subtract(img1, img2)
         self.putImage(imgdiff1, 'imgdiff1')
         imgdiff2 = cv2.subtract(img2, img1)
@@ -168,7 +229,7 @@ class WorkerThread(Thread):
 
         kernel = np.ones((5,5),np.uint8)
         #imgc = cv2.morphologyEx(imgb, cv2.MORPH_OPEN, kernel)
-        tmp = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel)
+        tmp = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel)
         imgc = cv2.morphologyEx(tmp, cv2.MORPH_CLOSE, kernel)
 
         self.putImage(imgc, 'stripes')
@@ -194,18 +255,23 @@ class WorkerThread(Thread):
                 continue
             filtered.append(c)
 
+        slicegroup = sv.SliceGroup(sname, width, height, rows, cols, filtered)
         cv2.drawContours(image, filtered, -1, (255,0,0), 2)
         self.putImage(image, 'stripes2')
+        return slicegroup
 
 
-    def doMaskAndCalibration(self, vname, sname, width, height, cols, rows, mask=None, x=0, y=0, square_width=None, square_height=None):
+    def doMaskAndCalibration(self, vname, sname, width, height, cols, rows, images, mask=None, x=0, y=0, square_width=None, square_height=None):
         # There is one less inside corner in each row and column than the number of squares we display
         cnrx = cols - 1
         cnry = rows - 1
 
-        logger.debug("Display and capture chessboard")
-        # Put up chessboard image, take photo. Invert chessboard and repeat.
-        img1, img2 = self.acquireCheckboards(vname, sname, width, height, cols, rows, x, y, square_width, square_height)
+        if images is not None:
+            img1, img2 = images
+        else:
+            logger.debug("Display and capture chessboard")
+            # Put up chessboard image, take photo. Invert chessboard and repeat.
+            img1, img2 = self.acquireCheckboards(vname, sname, width, height, cols, rows, x, y, square_width, square_height)
 
         if mask is None:
             logger.info("Creating mask")
@@ -225,14 +291,14 @@ class WorkerThread(Thread):
         logger.debug("Find chessboard")
         # Try to find chessboard in either image. Normally both should succeed if the whole chessboard is displayed.
         try:
-            coords = self.findChessboard(img1m, '{0}x{1}-diff1-cb'.format(cols, rows), cnrx, cnry)
-        except NotFoundError:
+            coords = sv.findChessboard(img1m, cnrx, cnry)
+        except sv.NotFoundError:
             # TODO: try harder to find what's left of the chessboard
             pass
 
         try:
-            coords = self.findChessboard(img2m, '{0}x{1}-diff2-cb'.format(cols, rows), cnrx, cnry)
-        except NotFoundError:
+            coords = sv.findChessboard(img2m, cnrx, cnry)
+        except sv.NotFoundError:
             return mask, None
 
         return mask, coords
@@ -400,21 +466,6 @@ class WorkerThread(Thread):
         return corners
 
 
-    def findChessboard(self, img, name, cnrx, cnry):
-        logger.info("Looking for %s x %s inside corners", cnrx, cnry)
-
-        status, data = cv2.findChessboardCorners(img, (cnrx, cnry), flags=cv2.cv.CV_CALIB_CB_ADAPTIVE_THRESH)
-        if status == False:
-            logger.error("Failed to parse checkerboard pattern in image")
-            raise NotFoundError("Failed to parse checkerboard pattern in image")
-
-        logger.info("Checkerboard found")
-        vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-        cv2.drawChessboardCorners(vis, (cnrx, cnry), data, status)
-        self.putImage(vis, name)
-        return data
-
-
     def acquireImage(self, imgname, width=None, height=None, focus=False):
         img = img_string_to_cv(self.camera.acquireImage(imgname, focus))
         if img is None:
@@ -442,11 +493,9 @@ class WorkerThread(Thread):
         width = self.screens[screen]['width']
         height = self.screens[screen]['height']
         if isinstance(img, str):
-            logger.debug('string')
             with open(path, 'wb') as f: f.write(img)
             gui.sendCommand('displayImage', window=screen, image=cStringIO.StringIO(img))
         elif isinstance(img, np.ndarray):
-            logger.debug("ndarray")
             cv2.imwrite(path, img)
             imgr = img_cv_resize(img, width, height, 'inner')
             gui.sendCommand('displayImage', window=screen, image=img_cv_to_stringio(imgr))
