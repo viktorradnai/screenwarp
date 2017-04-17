@@ -181,6 +181,7 @@ class WorkerThread(Thread):
 
                 #screenview.addSliceGroup(vbars, i+'-v')
 
+                slices = vbars1.getSlices()
                 logger.debug("vbars1 has %s slices", len(slices))
                 slices = vbars2.getSlices()
                 logger.debug("vbars2 has %s slices", len(slices))
