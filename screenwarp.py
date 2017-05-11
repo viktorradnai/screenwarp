@@ -118,7 +118,7 @@ def main():
             #logger.debug("[%s][%s] %s -> %s -> %s", r, c, corrected_grid[r][c][0], base_grid[r][c][0], inverse_grid[r][c][0])
             #logger.debug("[%s][%s] %s -> %s -> %s", r, c, corrected_grid[r][c][1], base_grid[r][c][1], inverse_grid[r][c][1])
 
-    draw_grid("out4.png", inverse_grid, 1280+20, 768+20, 10, 10)
+    draw_grid("out4.png", inverse_grid, screen_width+20, screen_height+20, 10, 10)
 
 
     with open(args.outfile, 'w+') as f:
