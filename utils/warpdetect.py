@@ -94,41 +94,42 @@ def main():
 
     draw_grid("out2.png", corrected_grid, screen_width+20, screen_height+20, 10, 10)
 
-    mins, maxes = get_bounding_box(corrected_grid)
-    logger.info("Edges: %s %s - %s %s", mins[0], mins[1], maxes[0], maxes[1])
-    mins, maxes = get_contained_box(corrected_grid)
-    logger.info("Edges: %s %s - %s %s", mins[0], mins[1], maxes[0], maxes[1])
-    edgex = mins[0] + (grid_width -  maxes[0])
-    edgey = mins[1] + (grid_height -  maxes[1])
-    mulx = grid_width / (grid_width - edgex)
-    muly = grid_height / (grid_height - edgey)
 
-    logger.info("mulx: %s, muly = %s", mulx, muly)
-
-    # Scale to screen size
-    for r in range(rows):
-        for c in range(cols):
-            corrected_grid[r][c][0] = (corrected_grid[r][c][0] - mins[0]) * mulx
-            corrected_grid[r][c][1] = (corrected_grid[r][c][1] - mins[1]) * muly
-
-    draw_grid("out3.png", corrected_grid, screen_width+20, screen_height+20, 10, 10)
     for r in range(rows-1, -1, -1):
         for c in range(cols):
             inverse_grid[r][c] = extrapolate(base_grid[r][c], corrected_grid[r][c])
             #logger.debug("[%s][%s] %s -> %s -> %s", r, c, corrected_grid[r][c][0], base_grid[r][c][0], inverse_grid[r][c][0])
             #logger.debug("[%s][%s] %s -> %s -> %s", r, c, corrected_grid[r][c][1], base_grid[r][c][1], inverse_grid[r][c][1])
 
-    draw_grid("out4.png", inverse_grid, 1280+20, 768+20, 10, 10)
 
+    draw_grid("out3.png", inverse_grid, screen_width+20, screen_height+20, 10, 10)
+
+    mins, maxes = get_bounding_box(inverse_grid)
+    logger.info("Edges: %s %s - %s %s", mins[0], mins[1], maxes[0], maxes[1])
+    #mins, maxes = get_contained_box(inverse_grid)
+    #logger.info("Edges: %s %s - %s %s", mins[0], mins[1], maxes[0], maxes[1])
+    edgex = mins[0] + (grid_width -  maxes[0])
+    edgey = mins[1] + (grid_height -  maxes[1])
+    mulx = grid_width / (grid_width - edgex)
+    muly = grid_height / (grid_height - edgey)
+
+    logger.info("mulx: %s, muly = %s", mulx, muly)
+    # Scale to screen size
+    for r in range(rows):
+        for c in range(cols):
+            inverse_grid[r][c][0] = (inverse_grid[r][c][0] - mins[0]) * mulx
+            inverse_grid[r][c][1] = (inverse_grid[r][c][1] - mins[1]) * muly
+
+    draw_grid("out4.png", inverse_grid, screen_width+20, screen_height+20, 10, 10)
 
     with open(args.outfile, 'w+') as f:
-        f.write("{0} {1}\n".format(rows, cols))
+        f.write("screenwarp 1 {0} {1} 0 0 0 0\n".format(rows, cols))
         for r in range(rows-1, -1, -1):
             for c in range(cols):
                 if c == 0 or c == cols-1: intensity = 0.2
                 else: intensity = 1
                 f.write("{0} {1} {2} {3} {4}\n".format(c / float(cols), r / float(rows),
-                    inverse_grid[r][c][0]/screen_width, inverse_grid[r][c][1]/screen_height, intensity))
+                    captured_grid[r][c][0]/screen_width, captured_grid[r][c][1]/screen_height, intensity))
 
     exit(0)
 

@@ -46,7 +46,7 @@
           </ortho>
           <panoramic-spherical>
             <texture>mainview</texture>
-            <file>calibration_points.txt</file>
+            <file>/home/vik/priv/projects/projector_calibration/screenwarp/flightgear/calibration_points.txt</file>
           </panoramic-spherical>
         </camera>
         <gui>

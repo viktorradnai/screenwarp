@@ -30,11 +30,11 @@ I've also found that the detection algorithm works better on small images (less 
 
 Process your photo with '''screenwarp.py'''. Screenwarp will read your image and use OpenCV's findChessboardCorners method to locate the inner edges of the chessboard pattern.
 
-    screenwarp.py DSCF1234.JPG calibration_points.txt
+    warpdetect.py DSCF1234.JPG calibration_points.warp
 
 If Screenwarp fails to locate the pattern, try reducing the number of rows and columns by one or more. You could also try to resize your image to be smaller.
 
-    screenwarp.py -r 8 -c 15 DSCF1234.png calibration_points.txt
+    warpdetect.py -r 8 -c 15 DSCF1234.png calibration_points.warp
 
 If everything goes well, Screenwarp will do the following:
 
@@ -47,19 +47,23 @@ If everything goes well, Screenwarp will do the following:
   and adding the difference to the ideal coordinates.
   - The resulting points are then written to a the output file specified on the command line.
 
-## Output File Format
+## Warp File Format
 
 The output file format is quite simple:
 
-    ROWS COLS
-    IDEAL_X1 IDEAL_Y1 CORRECTED_X1 CORRECTED_Y1 INTENSITY1
-    IDEAL_X2 IDEAL_Y2 CORRECTED_X2 CORRECTED_Y2 INTENSITY2
+    screenwarp VERSION ROWS COLS XS_FLIP YS_FLIP XD_FLIP YD_FLIP
+    DISP_X1 DISP_Y1 SRC_X1 SRC_Y1 INTENSITY1
+    DISP_X2 DISP_Y2 SRC_X2 SRC_Y2 INTENSITY1
     .
     .
-    .
-    IDEAL_Xn IDEAL_Yn CORRECTED_Xn CORRECTED_Yn INTENSITYn
+    DISP_Xn DISP_Y1 SRC_X1 SRC_Y1 INTENSITY1
 
-The first row has the number of rows and columns. This is followed by a line for each point (ROWS*COLS points in total).
+The first row is a header. It starts with an identifier that allows programs to check if they are reading a screenwarp file, then a version number which is an integer.
+The current version is 1.
+The following two fields specify the number of rows and columns. This determines the number of lines in the file which must match ROWS*COLS.
+The `*_FLIP` fields are boolean values that instruct Flightgear to reverse the relevant column. This is mostly useful for debugging and may be removed in a future version.
+
+The header is followed by a line for each point (ROWS*COLS points in total).
 In each row, the first four values are X and Y coordinates as a percentage of the screen width or height respectively. These are values between 0 and 1.
 Intensity is the brightness of the image at each point, also between 0 and 1. This is designed to be used for edge blending.
 Currently the brightness is reduced at the left and right edges. This behaviour will be made configurable eventually.
