@@ -49,7 +49,7 @@ def main():
                         dl = df.readline().split()
                         sl = sf.readline().split()
 
-                        of.write("{0} {1} {2} {3} {4}\n".format(1-float(dl[0]), float(dl[1]), float(sl[2]), 1-float(sl[3]), dl[4]))
+                        of.write("{0} {1} {2} {3} {4}\n".format(float(dl[2]), float(dl[3]), float(sl[2]), 1-float(sl[3]), dl[4]))
 
     sys.exit(0)
 

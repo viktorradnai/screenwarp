@@ -1,6 +1,279 @@
---- flightgear-2016.3.1-orig/src/Viewer/CameraGroup.cxx	2016-09-08 07:52:29.000000000 +0100
-+++ flightgear-2016.3.1/src/Viewer/CameraGroup.cxx	2016-11-23 02:15:15.632152390 +0000
-@@ -602,7 +602,6 @@
+Only in flightgear-2017.1.2/: build
+diff -ur flightgear-2017.1.2.orig/src/Viewer/CameraGroup.cxx flightgear-2017.1.2/src/Viewer/CameraGroup.cxx
+--- flightgear-2017.1.2.orig/src/Viewer/CameraGroup.cxx	2017-03-01 20:06:31.000000000 +0000
++++ flightgear-2017.1.2/src/Viewer/CameraGroup.cxx	2017-05-27 18:27:31.991434314 +0100
+@@ -62,10 +62,10 @@
+ 
+ namespace
+ {
+-    
++
+     // Given a projection matrix, return a new one with the same frustum
+     // sides and new near / far values.
+-    
++
+     void makeNewProjMat(Matrixd& oldProj, double znear,
+                         double zfar, Matrixd& projection)
+     {
+@@ -74,7 +74,7 @@
+         // extremes being clipped out.
+         znear *= 0.999;
+         zfar *= 1.001;
+-        
++
+         // Clamp the projection matrix z values to the range (near, far)
+         double epsilon = 1.0e-6;
+         if (fabs(projection(0,3)) < epsilon &&
+@@ -92,20 +92,20 @@
+             (-zfar*projection(2,3) + projection(3,3));
+             double ratio = fabs(2.0/(trans_near - trans_far));
+             double center = -0.5*(trans_near + trans_far);
+-            
++
+             projection.postMult(osg::Matrixd(1.0, 0.0, 0.0, 0.0,
+                                              0.0, 1.0, 0.0, 0.0,
+                                              0.0, 0.0, ratio, 0.0,
+                                              0.0, 0.0, center*ratio, 1.0));
+         }
+     }
+-    
++
+     osg::Matrix
+     invert(const osg::Matrix& matrix)
+     {
+         return osg::Matrix::inverse(matrix);
+     }
+-    
++
+     /// Returns the zoom factor of the master camera.
+     /// The reference fov is the historic 55 deg
+     double
+@@ -116,14 +116,14 @@
+             fov = 1;
+         return tan(55*0.5*SG_DEGREES_TO_RADIANS)/tan(fov*0.5*SG_DEGREES_TO_RADIANS);
+     }
+-    
++
+     osg::Vec2d
+     preMult(const osg::Vec2d& v, const osg::Matrix& m)
+     {
+         osg::Vec3d tmp = m.preMult(osg::Vec3(v, 0));
+         return osg::Vec2d(tmp[0], tmp[1]);
+     }
+-    
++
+     osg::Matrix
+     relativeProjection(const osg::Matrix& P0, const osg::Matrix& R, const osg::Vec2d ref[2],
+                        const osg::Matrix& pP, const osg::Matrix& pR, const osg::Vec2d pRef[2])
+@@ -135,12 +135,12 @@
+         // T is a translation matrix and S a scale matrix.
+         // We need to determine T and S so that the reference points in the parents
+         // projection space match the two reference points in this cameras projection space.
+-        
++
+         // Starting from the parents camera projection space, we get into this cameras
+         // projection space by the transform matrix:
+         //  P*R*inv(pP*pR) = T*S*P0*R*inv(pP*pR)
+         // So, at first compute that matrix without T*S and determine S and T from that
+-        
++
+         // Ok, now osg uses the inverse matrix multiplication order, thus:
+         osg::Matrix PtoPwithoutTS = invert(pR*pP)*R*P0;
+         // Compute the parents reference points in the current projection space
+@@ -149,18 +149,18 @@
+             preMult(pRef[0], PtoPwithoutTS),
+             preMult(pRef[1], PtoPwithoutTS)
+         };
+-        
++
+         // To get the same zoom, rescale to match the parents size
+         double s = (ref[0] - ref[1]).length()/(pRefInThis[0] - pRefInThis[1]).length();
+         osg::Matrix S = osg::Matrix::scale(s, s, 1);
+-        
++
+         // For the translation offset, incorporate the now known scale
+         // and recompute the position ot the first reference point in the
+         // currents projection space without the yet unknown T.
+         pRefInThis[0] = preMult(pRef[0], PtoPwithoutTS*S);
+         // The translation is then the difference of the reference points
+         osg::Matrix T = osg::Matrix::translate(osg::Vec3d(ref[0] - pRefInThis[0], 0));
+-        
++
+         // Compose and return the desired final projection matrix
+         return P0*S*T;
+     }
+@@ -187,14 +187,14 @@
+             listenToNode("zfar", 120000.0f);
+             listenToNode("near-field", 100.0f);
+         }
+-        
++
+         virtual ~CameraGroupListener()
+         {
+             unlisten("znear");
+             unlisten("zfar");
+             unlisten("near-field");
+         }
+-        
++
+         virtual void valueChanged(SGPropertyNode* prop)
+         {
+             if (!strcmp(prop->getName(), "znear")) {
+@@ -216,17 +216,17 @@
+             n->addChangeListener(this);
+             valueChanged(n); // propogate initial state through
+         }
+-        
++
+         void unlisten(const std::string& name)
+         {
+             _groupNode->getChild(name)->removeChangeListener(this);
+         }
+-        
++
+         SGPropertyNode_ptr _groupNode;
+         CameraGroup* _cameraGroup; // non-owning reference
+-        
++
+     };
+-    
++
+     class CameraViewportListener : public SGPropertyChangeListener
+     {
+     public:
+@@ -241,7 +241,7 @@
+             listenToNode("width", traits->width);
+             listenToNode("height", traits->height);
+         }
+-        
++
+         virtual ~CameraViewportListener()
+         {
+             unlisten("x");
+@@ -249,7 +249,7 @@
+             unlisten("width");
+             unlisten("height");
+         }
+-        
++
+         virtual void valueChanged(SGPropertyNode* prop)
+         {
+             if (!strcmp(prop->getName(), "x")) {
+@@ -273,17 +273,17 @@
+             n->addChangeListener(this);
+             valueChanged(n); // propogate initial state through
+         }
+-        
++
+         void unlisten(const std::string& name)
+         {
+             _viewportNode->getChild(name)->removeChangeListener(this);
+         }
+-        
++
+         SGPropertyNode_ptr _viewportNode;
+         CameraInfo* _camera;
+-        
++
+     };
+-    
++
+     const char* MAIN_CAMERA = "main";
+     const char* FAR_CAMERA = "far";
+     const char* GEOMETRY_CAMERA = "geometry";
+@@ -363,7 +363,7 @@
+ {
+     delete viewportListener;
+ }
+-    
++
+ osg::Camera* CameraInfo::getCamera(const std::string& k) const
+ {
+     CameraMap::const_iterator ii = cameras.find( k );
+@@ -399,7 +399,7 @@
+ 
+ CameraGroup::~CameraGroup()
+ {
+-    
++
+     for (CameraList::iterator i = _cameras.begin(); i != _cameras.end(); ++i) {
+         CameraInfo* info = *i;
+         for (CameraMap::iterator ii = info->cameras.begin(); ii != info->cameras.end(); ++ii) {
+@@ -408,10 +408,10 @@
+             _viewer->removeSlave(slaveIndex);
+         }
+     }
+-    
++
+     _cameras.clear();
+ }
+-    
++
+ void CameraGroup::update(const osg::Vec3d& position,
+                          const osg::Quat& orientation)
+ {
+@@ -450,11 +450,11 @@
+                         RenderStageInfo prsi = parentInfo->cameras.find(MAIN_CAMERA)->second;
+                         osg::Matrix pP = prsi.camera->getProjectionMatrix();
+                         osg::Matrix pR = prsi.camera->getViewMatrix();
+-                    
++
+                         // And the projection matrix derived from P0 so that the reference points match
+                         projectionMatrix = relativeProjection(P0, R, info->thisReference,
+                                                               pP, pR, info->parentReference);
+-                    
++
+                     } else {
+                         // We want to zoom, so take the original matrix and apply the zoom to it.
+                         projectionMatrix = slave._projectionOffset;
+@@ -540,11 +540,11 @@
+                                 RenderStageInfo prsi = parentInfo->cameras.find(MAIN_CAMERA)->second;
+                                 osg::Matrix pP = prsi.camera->getProjectionMatrix();
+                                 osg::Matrix pR = prsi.camera->getViewMatrix();
+-                    
++
+                                 // And the projection matrix derived from P0 so that the reference points match
+                                 projectionMatrix = relativeProjection(P0, R, info->thisReference,
+                                                                       pP, pR, info->parentReference);
+-                    
++
+                             } else {
+                                 // We want to zoom, so take the original matrix and apply the zoom to it.
+                                 projectionMatrix = slave._projectionOffset;
+@@ -573,7 +573,7 @@
+ _viewer(viewer)
+ {
+ }
+-    
++
+ void CameraGroup::setCameraParameters(float vfov, float aspectRatio)
+ {
+     if (vfov != 0.0f && aspectRatio != 0.0f)
+@@ -582,14 +582,14 @@
+                                                1.0f / aspectRatio,
+                                                _zNear, _zFar);
+ }
+-    
++
+ double CameraGroup::getMasterAspectRatio() const
+ {
+     if (_cameras.empty())
+         return 0.0;
+-    
++
+     const CameraInfo* info = _cameras.front();
+-    
++
+     osg::Camera* camera = info->getCamera(MAIN_CAMERA);
+     if ( !camera )
+         camera = info->getCamera( GEOMETRY_CAMERA );
+@@ -597,12 +597,11 @@
+     if (!viewport) {
+         return 0.0;
+     }
+-    
++
+     return static_cast<double>(viewport->height()) / viewport->width();
  }
  
  // Mostly copied from osg's osgViewer/View.cpp
@@ -8,6 +281,17 @@
  static osg::Geometry* createPanoramicSphericalDisplayDistortionMesh(
      const Vec3& origin, const Vec3& widthVector, const Vec3& heightVector,
      double sphere_radius, double collar_radius,
+@@ -618,8 +617,8 @@
+ #if 0
+     osg::Vec3d projector = eye - osg::Vec3d(0.0,0.0, distance);
+ 
+-    OSG_INFO<<"createPanoramicSphericalDisplayDistortionMesh : Projector position = "<<projector<<std::endl;
+-    OSG_INFO<<"createPanoramicSphericalDisplayDistortionMesh : distance = "<<distance<<std::endl;
++    SG_LOG(SG_VIEW, SG_INFO, "createPanoramicSphericalDisplayDistortionMesh : Projector position = "<<projector);
++    SG_LOG(SG_VIEW, SG_INFO, "createPanoramicSphericalDisplayDistortionMesh : distance = "<<distance);
+ #endif
+     // create the quad to visualize.
+     osg::Geometry* geometry = new osg::Geometry();
 @@ -678,11 +677,16 @@
  
  
@@ -21,60 +305,61 @@
 -                vertices->push_back(v);
 +                v2 = v;
 +
-+            OSG_WARN<<"coords x: "<< v2.x() <<" y: "<< v2.y() <<" z: "<< v2.z()<<std::endl;;
++            SG_LOG(SG_VIEW, SG_WARN, "coords x: "<< v2.x() <<" y: "<< v2.y() <<" z: "<< v2.z());;
 +
 +            vertices->push_back(v2);
  
              texcoords0->push_back( texcoord );
  
-@@ -746,6 +750,93 @@
+@@ -746,30 +750,131 @@
      return geometry;
  }
  
 +
-+static osg::Geometry* createCustomDistortionMesh(const osg::Vec3& widthVector, const osg::Vec3& heightVector, string fileName)
++static osg::Geometry* createCustomDistortionMesh(float width, float height, float texwidth, float texheight, string fileName)
 +{
-+    bool flip = true;
-+    bool texcoord_flip = true;
++    string screenwarp;
++    int version, rows, cols;
++    bool xsflip, ysflip, xdflip, ydflip;
 +
 +    // create the quad to visualize.
 +    osg::Geometry* geometry = new osg::Geometry();
 +
 +    geometry->setSupportsDisplayList(false);
 +
-+    osg::Vec3 xAxis(widthVector);
-+    float width = widthVector.length();
-+    xAxis /= width;
-+
-+    osg::Vec3 yAxis(heightVector);
-+    float height = heightVector.length();
-+    yAxis /= height;
-+
 +    osg::Vec3Array* vertices = new osg::Vec3Array;
 +    osg::Vec2Array* texcoords0 = new osg::Vec2Array;
 +    osg::Vec2Array* texcoords1 = new osg::Vec2Array;
 +    osg::Vec4Array* colors = new osg::Vec4Array;
 +
++    SG_LOG(SG_VIEW, SG_INFO, "Creating "<<width<<"x"<<height<<"px virtual screen");
 +    geometry->getOrCreateStateSet()->setMode(GL_CULL_FACE, osg::StateAttribute::OFF | osg::StateAttribute::PROTECTED);
 +
-+    int rows, cols;
-+    // xb (Xbase) and yb (Ybase) are the original undistorted grid coordinates
-+    // xc (Xcorrected) and yc (Ycorrected) are the corrected (distorted) grid coordinates
++    // xd (Xdisplay) and yd (Ydisplay) are coordinates for the projection screen object
++    // xs (Xsource) and ys (Ysource) are the coordinates from the source camera
++    // Both can be distorted
 +    // i is the intensity value at the given point
-+    double xb, yb, xc, yc, i;
++    double xd, yd, xs, ys, i;
 +
 +    std::ifstream infile(fileName);
 +    if(!infile) {
-+        OSG_WARN<<"Could not open distortion map file '"<<"'"<<std::endl;
++        SG_LOG(SG_VIEW, SG_ALERT, "Could not open distortion map file '"<<fileName<<"'");
 +        return geometry;
 +    }
-+    infile >> rows >> cols;
-+    while (infile >> xb >> yb >> xc >> yc >> i) {
++    infile >> screenwarp >> version >> rows >> cols >> xsflip >> ysflip >> xdflip >> ydflip;
++    if (screenwarp.compare("screenwarp")) {
++        SG_LOG(SG_VIEW, SG_ALERT, "Warp file " << fileName << " does not start with 'screenwarp'");
++        return geometry;
++    }
++    while (infile >> xs >> ys >> xd >> yd >> i) {
 +
-+        if(flip) yc = 1 - yc;
-+        if(texcoord_flip) yb = 1 - yb;
-+        osg::Vec3 v(xc*width, yc*height, 0.0);
-+        osg::Vec2 texcoord(xb, yb);
++        if(xsflip) xs = 1 - xs;
++        if(ysflip) ys = 1 - ys;
++        if(xdflip) xd = 1 - xd;
++        if(ydflip) yd = 1 - yd;
++        osg::Vec3 v(xd*width, yd*height, 0.0);
++        osg::Vec2 texcoord(xs, ys);
++        // SG_LOG(SG_VIEW, SG_INFO, "Xsource: "<<xs<<", Ysource: "<<ys);
 +
 +        vertices->push_back(v);
 +        texcoords0->push_back( texcoord );
@@ -91,9 +376,9 @@
 +    geometry->setTexCoordArray(0, texcoords0);
 +    geometry->setTexCoordArray(1, texcoords1);
 +
++    // generate triangles that connect the vertices to form a surface
 +    osg::DrawElementsUShort* elements = new osg::DrawElementsUShort(osg::PrimitiveSet::TRIANGLES);
 +    geometry->addPrimitiveSet(elements);
-+
 +
 +    for(int i=0;i<rows-1;++i)
 +    {
@@ -121,35 +406,49 @@
  void CameraGroup::buildDistortionCamera(const SGPropertyNode* psNode,
                                          Camera* camera)
  {
-@@ -760,6 +851,7 @@
-         // error
+     const SGPropertyNode* texNode = psNode->getNode("texture");
+     if (!texNode) {
+-        // error
++        SG_LOG(SG_VIEW, SG_ALERT, "Panoramic-spherical view has no texture node");
+         return;
+     }
+     string texName = texNode->getStringValue();
+     TextureMap::iterator itr = _textureTargets.find(texName);
+     if (itr == _textureTargets.end()) {
+-        // error
++        SG_LOG(SG_VIEW, SG_ALERT, "Texture '"<<texName<<"' not found for panoramic-spherical view");
          return;
      }
 +
      Viewport* viewport = camera->getViewport();
      float width = viewport->width();
      float height = viewport->height();
-@@ -767,9 +859,19 @@
-     double radius = psNode->getDoubleValue("radius", 1.0);
-     double collar = psNode->getDoubleValue("collar", 0.45);
+     TextureRectangle* texRect = itr->second.get();
+-    double radius = psNode->getDoubleValue("radius", 1.0);
+-    double collar = psNode->getDoubleValue("collar", 0.45);
++    float texwidth = texRect->getTextureWidth();
++    float texheight = texRect->getTextureHeight();
      Geode* geode = new Geode();
+-    geode->addDrawable(createPanoramicSphericalDisplayDistortionMesh(
 +
 +
 +    const SGPropertyNode* fileNode = psNode->getNode("file");
 +    if (fileNode) {
 +        string fileName = fileNode->getStringValue();
-+        OSG_INFO<<"Loading distortion map from file: "<<fileName<<std::endl;
++        SG_LOG(SG_VIEW, SG_INFO, "Loading distortion map from file: "<<fileName);
 +        geode->addDrawable(createCustomDistortionMesh(
-+                           Vec3(width,0.0f,0.0f), Vec3(0.0f,height,0.0f), fileName));
++                           width, height, texwidth, texheight, fileName));
 +    } else {
-     geode->addDrawable(createPanoramicSphericalDisplayDistortionMesh(
++        double radius = psNode->getDoubleValue("radius", 1.0);
++        double collar = psNode->getDoubleValue("collar", 0.45);
++        geode->addDrawable(createPanoramicSphericalDisplayDistortionMesh(
                             Vec3(0.0f,0.0f,0.0f), Vec3(width,0.0f,0.0f),
                             Vec3(0.0f,height,0.0f), radius, collar));
 +    }
  
      // new we need to add the texture to the mesh, we do so by creating a
      // StateSet to contain the Texture StateAttribute.
-@@ -795,6 +897,7 @@
+@@ -795,6 +900,7 @@
      camera->setName("DistortionCorrectionCamera");
  }
  
@@ -157,3 +456,160 @@
  CameraInfo* CameraGroup::buildCamera(SGPropertyNode* cameraNode)
  {
      WindowBuilder *wBuild = WindowBuilder::getWindowBuilder();
+@@ -991,6 +1097,10 @@
+         double sheary = cameraNode->getDoubleValue("shear-y", 0);
+         pOff.makeTranslate(-shearx, -sheary, 0);
+     }
++     	double left, right, bottom, top, zNear, zFar;
++        pOff.getFrustum(left, right, bottom, top, zNear, zFar);
++    SG_LOG(SG_VIEW, SG_INFO, "Creating camera with frustum left: "
++        << left << ", right: " << right << ", top: " << top << ", bottom: " << bottom << ", zNear: " << zNear << ", zFar: " << zFar);
+     const SGPropertyNode* textureNode = cameraNode->getNode("texture");
+     if (textureNode) {
+         string texName = textureNode->getStringValue("name");
+@@ -1017,7 +1127,7 @@
+     bool useMasterSceneGraph = !psNode;
+     CameraInfo* info = globals->get_renderer()->buildRenderingPipeline(this, cameraFlags, camera, vOff, pOff,
+                                                                         window->gc.get(), useMasterSceneGraph);
+-    
++
+     info->name = cameraNode->getStringValue("name");
+     info->physicalWidth = physicalWidth;
+     info->physicalHeight = physicalHeight;
+@@ -1030,13 +1140,13 @@
+     info->parentReference[1] = parentReference[1];
+     info->thisReference[0] = thisReference[0];
+     info->thisReference[1] = thisReference[1];
+-    
++
+     // If a viewport isn't set on the camera, then it's hard to dig it
+     // out of the SceneView objects in the viewer, and the coordinates
+     // of mouse events are somewhat bizzare.
+-    
++
+     info->viewportListener = new CameraViewportListener(info, viewportNode, window->gc->getTraits());
+-    
++
+     info->updateCameras();
+     // Distortion camera needs the viewport which is created by addCamera().
+     if (psNode) {
+@@ -1117,7 +1227,7 @@
+ {
+     CameraGroup* cgroup = new CameraGroup(viewer);
+     cgroup->_listener.reset(new CameraGroupListener(cgroup, gnode));
+-    
++
+     for (int i = 0; i < gnode->nChildren(); ++i) {
+         SGPropertyNode* pNode = gnode->getChild(i);
+         const char* name = pNode->getName();
+@@ -1202,14 +1312,14 @@
+ 
+     return *result;
+ }
+-  
++
+ Camera* getGUICamera(CameraGroup* cgroup)
+ {
+     const CameraInfo* info = cgroup->getGUICamera();
+     if (!info) {
+         return NULL;
+     }
+-    
++
+     return info->getCamera(MAIN_CAMERA);
+ }
+ 
+@@ -1222,23 +1332,23 @@
+ 
+   if (!(cinfo->flags & CameraGroup::DO_INTERSECTION_TEST))
+     return false;
+-  
++
+   const Camera* camera = cinfo->getCamera(MAIN_CAMERA);
+   if ( !camera )
+     camera = cinfo->getCamera( GEOMETRY_CAMERA );
+- 
++
+   // if (camera->getGraphicsContext() != ea->getGraphicsContext())
+  //   return false;
+-  
++
+   const Viewport* viewport = camera->getViewport();
+   SGRect<double> viewportRect(viewport->x(), viewport->y(),
+                               viewport->x() + viewport->width() - 1.0,
+                               viewport->y() + viewport->height()- 1.0);
+-    
++
+   double epsilon = 0.5;
+   if (!viewportRect.contains(windowPos.x(), windowPos.y(), epsilon))
+     return false;
+-  
++
+   Vec4d start(windowPos.x(), windowPos.y(), 0.0, 1.0);
+   Vec4d end(windowPos.x(), windowPos.y(), 1.0, 1.0);
+   Matrix windowMat = viewport->computeWindowMatrix();
+@@ -1261,16 +1371,16 @@
+                                Vec3d(end.x(), end.y(), end.z()));
+   osgUtil::IntersectionVisitor iv(picker.get());
+   iv.setTraversalMask( simgear::PICK_BIT );
+-    
++
+   const_cast<Camera*>(camera)->accept(iv);
+   if (picker->containsIntersections()) {
+     intersections = picker->getIntersections();
+     return true;
+   }
+-  
++
+   return false;
+ }
+-  
++
+ bool computeIntersections(const CameraGroup* cgroup,
+                           const osg::Vec2d& windowPos,
+                           osgUtil::LineSegmentIntersector::Intersections& intersections)
+@@ -1279,7 +1389,7 @@
+     const CameraInfo* guiCamera = cgroup->getGUICamera();
+     if (guiCamera && computeCameraIntersection(guiCamera, windowPos, intersections))
+         return true;
+-    
++
+     // Find camera that contains event
+     for (CameraGroup::ConstCameraIterator iter = cgroup->camerasBegin(),
+              e = cgroup->camerasEnd();
+@@ -1288,11 +1398,11 @@
+         const CameraInfo* cinfo = iter->get();
+         if (cinfo == guiCamera)
+             continue;
+-        
++
+         if (computeCameraIntersection(cinfo, windowPos, intersections))
+             return true;
+     }
+-  
++
+     intersections.clear();
+     return false;
+ }
+@@ -1354,7 +1464,7 @@
+                 copyProperties(propNode, copiedNode);
+             }
+         }
+-        
++
+         SGPropertyNodeVec cameras(cgroupNode->getChildren("camera"));
+         SGPropertyNode* masterCamera = 0;
+         SGPropertyNodeVec::const_iterator it;
+@@ -1376,10 +1486,10 @@
+             setValue(cgroupNode->getNode("gui/window/name", true),
+                      nameNode->getStringValue());
+     }
+-    
++
+     CameraGroup* cgroup = buildCameraGroup(viewer, cgroupNode);
+     setDefault(cgroup);
+ }
+-    
++
+ } // of namespace flightgear
+ 
