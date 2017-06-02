@@ -66,7 +66,7 @@
           </view>
           <perspective>
             <fovy-deg>58.88</fovy-deg>
-            <aspect-ratio>2</aspect-ratio>
+            <aspect-ratio>1.8</aspect-ratio>
             <near>0.4</near>
             <far>200000</far>
             <fixed-near-far>false</fixed-near-far>
@@ -113,7 +113,7 @@
           </view>
           <perspective>
             <fovy-deg>58.88</fovy-deg>
-            <aspect-ratio>2</aspect-ratio>
+            <aspect-ratio>1.8</aspect-ratio>
             <near>0.4</near>
             <far>200000</far>
             <fixed-near-far>false</fixed-near-far>
@@ -159,7 +159,7 @@
           </view>
           <perspective>
             <fovy-deg>58.88</fovy-deg>
-            <aspect-ratio>2</aspect-ratio>
+            <aspect-ratio>1.8</aspect-ratio>
             <near>0.4</near>
             <far>200000</far>
             <fixed-near-far>false</fixed-near-far>
