@@ -24,6 +24,8 @@ def parse_cmdline():
     parser.add_argument('-r', '--rows', type=int, help="Number of squares per row", default=16)
     parser.add_argument('-c', '--cols', type=int, help="Number of inner corners per column", default=9)
     parser.add_argument('-a', '--align', action='store_true', help="Consider the bottom row of points as a reference line")
+    parser.add_argument('-i', '--invert', action='store_true', help="Create inverse grid (subtract points from base grid)")
+    parser.add_argument('-n', '--normalize', action='store_true', help="Scale grid x and y coordinates to be betwen 0..1")
     parser.add_argument('infile', help="Input image to find the chessboard in")
     parser.add_argument('outfile', help="Data file containing warp coordinates")
     args = parser.parse_args()
@@ -54,8 +56,7 @@ def main():
     cols = args.cols + 1
     rows = args.rows + 1
 
-    corrected_grid = np.empty((rows, cols, 2), np.float32)
-    inverse_grid = np.empty((rows, cols, 2), np.float32)
+    grid = np.empty((rows, cols, 2), np.float32)
 
     base_grid = get_base_grid(rows, cols, square_width, square_height)
 
@@ -86,41 +87,27 @@ def main():
     if args.align:
         # The bottom edge is the line we consider "straight". Straighten image using bottom edge as ref and align to bottom of pic
         for c in range(cols):
-            offset = captured_grid[rows-1][c]
+            offset = grid[rows-1][c]
             for r in range(rows):
-                corrected_grid[r][c] = [ captured_grid[r][c][0], captured_grid[r][c][1] - offset[1] + screen_height ]
+                grid[r][c] = [ captured_grid[r][c][0], captured_grid[r][c][1] - offset[1] + screen_height ]
     else:
-        corrected_grid = captured_grid.copy()
+        grid = captured_grid.copy()
 
-    draw_grid("out2.png", corrected_grid, screen_width+20, screen_height+20, 10, 10)
+    draw_grid("out2.png", grid, screen_width+20, screen_height+20, 10, 10)
 
+    if args.invert:
+        for r in range(rows-1, -1, -1):
+            for c in range(cols):
+                grid[r][c] = extrapolate(base_grid[r][c], grid[r][c])
+                #logger.debug("[%s][%s] %s -> %s -> %s", r, c, corrected_grid[r][c][0], base_grid[r][c][0], inverse_grid[r][c][0])
+                #logger.debug("[%s][%s] %s -> %s -> %s", r, c, corrected_grid[r][c][1], base_grid[r][c][1], inverse_grid[r][c][1])
 
-    for r in range(rows-1, -1, -1):
-        for c in range(cols):
-            inverse_grid[r][c] = extrapolate(base_grid[r][c], corrected_grid[r][c])
-            #logger.debug("[%s][%s] %s -> %s -> %s", r, c, corrected_grid[r][c][0], base_grid[r][c][0], inverse_grid[r][c][0])
-            #logger.debug("[%s][%s] %s -> %s -> %s", r, c, corrected_grid[r][c][1], base_grid[r][c][1], inverse_grid[r][c][1])
+    draw_grid("out3.png", grid, screen_width+20, screen_height+20, 10, 10)
 
+    if args.normalize:
+        grid2 = normalize_grid(grid)
 
-    draw_grid("out3.png", inverse_grid, screen_width+20, screen_height+20, 10, 10)
-
-    mins, maxes = get_bounding_box(inverse_grid)
-    logger.info("Edges: %s %s - %s %s", mins[0], mins[1], maxes[0], maxes[1])
-    #mins, maxes = get_contained_box(inverse_grid)
-    #logger.info("Edges: %s %s - %s %s", mins[0], mins[1], maxes[0], maxes[1])
-    edgex = mins[0] + (grid_width -  maxes[0])
-    edgey = mins[1] + (grid_height -  maxes[1])
-    mulx = grid_width / (grid_width - edgex)
-    muly = grid_height / (grid_height - edgey)
-
-    logger.info("mulx: %s, muly = %s", mulx, muly)
-    # Scale to screen size
-    for r in range(rows):
-        for c in range(cols):
-            inverse_grid[r][c][0] = (inverse_grid[r][c][0] - mins[0]) * mulx
-            inverse_grid[r][c][1] = (inverse_grid[r][c][1] - mins[1]) * muly
-
-    draw_grid("out4.png", inverse_grid, screen_width+20, screen_height+20, 10, 10)
+    draw_grid("out4.png", grid2, screen_width+20, screen_height+20, 10, 10)
 
     with open(args.outfile, 'w+') as f:
         f.write("screenwarp 1 {0} {1} 0 0 0 0\n".format(rows, cols))
@@ -128,8 +115,9 @@ def main():
             for c in range(cols):
                 if c == 0 or c == cols-1: intensity = 0.2
                 else: intensity = 1
+                #f.write("{0:.15f} {1:.15f} {2:.15f} {3:.15f} {4:.15f}\n".format(c / float(cols), r / float(rows),
                 f.write("{0} {1} {2} {3} {4}\n".format(c / float(cols), r / float(rows),
-                    captured_grid[r][c][0]/screen_width, captured_grid[r][c][1]/screen_height, intensity))
+                    grid2[r][c][0], grid2[r][c][1], intensity))
 
     exit(0)
 
@@ -229,8 +217,8 @@ def get_bounding_box(grid):
     mins = [None, None]
     maxes = [None, None]
 
-    for r in range(len(grid)):
-        for c in range(len(grid[r])):
+    for r in range(grid.shape[0]):
+        for c in range(grid.shape[1]):
             curr = grid[r][c]
             if mins[0] == None or mins[0] > curr[0]:
                 mins[0] = curr[0]
@@ -242,6 +230,28 @@ def get_bounding_box(grid):
                 maxes[1] = curr[1]
 
     return(mins, maxes)
+
+
+def normalize_grid(grid):
+    rgrid = grid.copy()
+    mins, maxes = get_bounding_box(grid)
+    grid_width = maxes[0] - mins[0]
+    grid_height = maxes[1] - mins[1]
+
+    logger.info("Edges: %s %s - %s %s", mins[0], mins[1], maxes[0], maxes[1])
+
+    mulx = 1 / (maxes[0] - mins[0])
+    muly = 1 / (maxes[1] - mins[1])
+
+    logger.info("mulx: %s, muly = %s", mulx, muly)
+    # Scale to screen size
+    for r in range(grid.shape[0]):
+        for c in range(grid.shape[1]):
+            rgrid[r][c][0] = (grid[r][c][0] - mins[0]) * mulx
+            rgrid[r][c][1] = (grid[r][c][1] - mins[1]) * muly
+            # logger.debug(grid[r][c])
+
+    return rgrid
 
 
 # call main()
