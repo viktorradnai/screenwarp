@@ -51,12 +51,12 @@ If everything goes well, Screenwarp will do the following:
 
 The output file format is quite simple:
 
-    screenwarp VERSION ROWS COLS XS_FLIP YS_FLIP XD_FLIP YD_FLIP
-    DISP_X1 DISP_Y1 SRC_X1 SRC_Y1 INTENSITY1
-    DISP_X2 DISP_Y2 SRC_X2 SRC_Y2 INTENSITY1
+    screenwarp VERSION ROWS COLS X_FLIP Y_FLIP U_FLIP V_FLIP
+    X1 Y1 U1 V1 INTENSITY1
+    X2 Y2 U2 V2 INTENSITY2
     .
     .
-    DISP_Xn DISP_Y1 SRC_X1 SRC_Y1 INTENSITY1
+    Xn Yn Un Vn INTENSITYn
 
 The first row is a header. It starts with an identifier that allows programs to check if they are reading a screenwarp file, then a version number which is an integer.
 The current version is 1.
