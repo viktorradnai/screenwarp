@@ -110,14 +110,14 @@ def main():
     draw_grid("out4.png", grid2, screen_width+20, screen_height+20, 10, 10)
 
     with open(args.outfile, 'w+') as f:
-        f.write("screenwarp 1 {0} {1} 0 0 0 0\n".format(rows, cols))
+        f.write("screenwarp 2 {0} {1} 0 0 0 0\n".format(rows, cols))
         for r in range(rows-1, -1, -1):
             for c in range(cols):
                 if c == 0 or c == cols-1: intensity = 0.2
                 else: intensity = 1
                 #f.write("{0:.15f} {1:.15f} {2:.15f} {3:.15f} {4:.15f}\n".format(c / float(cols), r / float(rows),
-                f.write("{0} {1} {2} {3} {4}\n".format(c / float(cols), r / float(rows),
-                    grid2[r][c][0], grid2[r][c][1], intensity))
+                f.write("{0} {1} {2} {3} {4}\n".format(
+                    grid2[r][c][0], grid2[r][c][1], c / float(cols), r / float(rows), intensity))
 
     exit(0)
 

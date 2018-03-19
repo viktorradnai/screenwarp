@@ -56,8 +56,8 @@ def main():
             for c in range(cols):
                 l = f.readline().split()
                 #logger.debug(l)
-                rv = float(l[0]) * (rows)
-                cv = float(l[1]) * (cols)
+                rv = float(l[3]) * (rows)
+                cv = float(l[2]) * (cols)
                 logger.debug("%s -> %s, %s -> %s", r, rv, c, cv)
                 rv = int(round(rv))
                 cv = int(round(cv))
@@ -66,8 +66,8 @@ def main():
                 if c != cv:
                     logger.error("Col %s != %s", c, cv)
 
-                grid[r][c][0] = float(l[2]) * screen_width
-                grid[r][c][1] = float(l[3]) * screen_height
+                grid[r][c][0] = float(l[0]) * screen_width
+                grid[r][c][1] = float(l[1]) * screen_height
                 logger.debug("[%s][%s] = ( %s, %s)", r, c, grid[r][c][0], grid[r][c][1])
 
     draw_grid(args.outfile, grid, screen_width+20, screen_height+20, 10, 10)

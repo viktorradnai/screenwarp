@@ -29,15 +29,15 @@ def parse_cmdline():
 def main():
 
     args = parse_cmdline()
-    with open(args.infile1) as df:
-        with open(args.infile2) as sf:
+    with open(args.infile1) as xyf:
+        with open(args.infile2) as uvf:
             with open(args.outfile, 'w+') as of:
-                s, v, r, c, sxi, syi, dxi, dyi = df.readline().split()
+                s, v, r, c, dxi, dyi, dui, dvi = xyf.readline().split()
                 if s != 'screenwarp':
                     raise Exception("File {0} does not start with 'screenwarp'", args.infile1)
                 rows = int(r)
                 cols = int(c)
-                s, v, r, c, sxi, syi, dxi, dyi = sf.readline().split()
+                s, v, r, c, sxi, syi, dxi, dyi = uvf.readline().split()
                 if s != 'screenwarp':
                     raise Exception("File {0} does not start with 'screenwarp'", args.infile2)
                 if int(r) != rows or int(c) != cols:
@@ -46,10 +46,10 @@ def main():
                 of.write("{0} {1} {2} {3} {4} {5} {6} {7}\n".format(s, v, rows, cols, sxi, syi, dxi, dyi))
                 for r in range(rows-1, -1, -1):
                     for c in range(cols):
-                        dl = df.readline().split()
-                        sl = sf.readline().split()
+                        xyl = xyf.readline().split()
+                        uvl = uvf.readline().split()
 
-                        of.write("{0} {1} {2} {3} {4}\n".format(float(dl[2]), float(dl[3]), float(sl[2]), 1-float(sl[3]), dl[4]))
+                        of.write("{0} {1} {2} {3} {4}\n".format(float(xyl[0]), float(xyl[1]), float(uvl[0]), 1-float(uvl[1]), xyl[4]))
 
     sys.exit(0)
 
